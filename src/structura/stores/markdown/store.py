@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from structura.core.document import Document
@@ -12,6 +13,22 @@ from . import parse, serialize
 from .validate import validate
 
 STORE_NAME = parse.STORE_NAME
+
+
+@dataclass
+class Scan:
+    """One directory walk, both answers.
+
+    "Which files do I parse as notes?" and "which names may a wikilink
+    legitimately resolve to?" are different questions with different skip
+    rules, but they read the same directory tree. Answering them in separate
+    walks doubled the traversal on every full sync for no reason.
+    """
+
+    notes: list[Path] = field(default_factory=list)
+    #: (name, providing path) -- a markdown file supplies both its filename and
+    #: its stem; anything else supplies only its filename (legacy R31).
+    link_targets: list[tuple[str, Path]] = field(default_factory=list)
 
 
 class MarkdownStore:
@@ -27,8 +44,8 @@ class MarkdownStore:
     def _marker(self) -> str:
         return self.schema.markdown.task_marker
 
-    def paths(self) -> list[Path]:
-        """Every markdown file that should be parsed as a note.
+    def scan(self) -> Scan:
+        """Walk the workspace once, collecting notes and link targets.
 
         Dot-directories (`.git`, `.structura`, `.venv`, `.pytest_cache`, ...)
         are skipped generically by a leading-`.` check on every path component
@@ -37,13 +54,49 @@ class MarkdownStore:
         tried the other way.
         """
         skip = self.schema.markdown.skip
-        found = []
-        for path in sorted(self.root.rglob("*.md")):
-            parts = path.relative_to(self.root).parts
-            if any(part.startswith(".") or part in skip for part in parts):
+        link_skip = self.schema.markdown.link_target_skip
+        result = Scan()
+
+        for path in sorted(self.root.rglob("*")):
+            if not path.is_file():
                 continue
-            found.append(path)
-        return found
+            parts = path.relative_to(self.root).parts
+            dotted = any(part.startswith(".") for part in parts)
+            is_markdown = path.suffix.lower() == ".md"
+
+            if is_markdown and not dotted and not any(part in skip for part in parts):
+                result.notes.append(path)
+
+            if not dotted and not any(part in link_skip for part in parts):
+                result.link_targets.append((path.name, path))
+                if is_markdown:
+                    result.link_targets.append((path.stem, path))
+
+        return result
+
+    def paths(self) -> list[Path]:
+        """Every markdown file that should be parsed as a note."""
+        return self.scan().notes
+
+    def contains(self, path: Path) -> bool:
+        """Whether one path is a note this store parses.
+
+        The same rules as `paths()`, decided per path. The incremental sync
+        needs this: asking `paths()` whether it contains one file would walk
+        the whole workspace on every keystroke-triggered save, which is what
+        turned a 20 ms budget into 150 ms the first time it was measured.
+        """
+        path = Path(path)
+        if path.suffix.lower() != ".md":
+            return False
+        try:
+            parts = path.relative_to(self.root).parts
+        except ValueError:
+            return False
+        skip = self.schema.markdown.skip
+        if any(part.startswith(".") or part in skip for part in parts):
+            return False
+        return path.is_file()
 
     def load(self, path: Path) -> Document:
         return parse.parse_document(
@@ -55,6 +108,8 @@ class MarkdownStore:
 
     def link_target_names(self) -> set[str]:
         """Every on-disk filename a wikilink may legitimately name.
+
+        See `scan()` for the walk itself; this is the set of names it found.
 
         A wikilink can target a non-markdown file directly -- `[[poster.pdf]]`
         names the file with its extension, the way `[[Post Rinse 4]]` names a
@@ -74,18 +129,7 @@ class MarkdownStore:
         files are excluded from parsing but ARE resolvable link targets,
         because they exist on disk.
         """
-        skip = self.schema.markdown.link_target_skip
-        names: set[str] = set()
-        for path in self.root.rglob("*"):
-            if not path.is_file():
-                continue
-            parts = path.relative_to(self.root).parts
-            if any(part.startswith(".") or part in skip for part in parts):
-                continue
-            names.add(path.name)
-            if path.suffix.lower() == ".md":
-                names.add(path.stem)
-        return names
+        return {name for name, _ in self.scan().link_targets}
 
     def validate(self, documents: list[Document] | None = None) -> list[Violation]:
         return validate(self.documents() if documents is None else documents, self.schema)

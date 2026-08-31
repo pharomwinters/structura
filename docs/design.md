@@ -255,14 +255,18 @@ is tracked user data, `state.db` is per-machine convenience, and `index.db` is d
 ### Tables
 
 ```sql
-documents   (uid PK, store, dtype, path, title, sort_key, parent_uid, mtime, sha256, indexed_at)
-fields      (uid, key, value, ord)          -- ord gives multi-valued fields
-tags        (uid, tag)
-links       (src_uid, target_raw, target_uid, kind, section, line_no)
-occurrences (uid, start_utc, end_utc, all_day, tzid, recurrence_id, PRIMARY KEY (uid, recurrence_id))
-tasks       (uid, source_uid, source_line, description, status, due, priority, owner, context)
-contacts    (uid, fn, sort_name, org, primary_email)
-fts         (uid, title, body)              -- FTS5, external content
+documents    (id PK, path UNIQUE, uid UNIQUE NULL, store, dtype, title, date, area, status,
+              mtime_ns, size, sha256, indexed_at)
+fields       (doc_id, key, value, ord)      -- ord gives multi-valued fields
+tags         (doc_id, tag)
+aliases      (alias, doc_id)                -- every title and alias
+links        (doc_id, target_raw, target_norm, section, is_embed, line_no, target_id)
+parents      (doc_id, target_norm, ord, target_id)   -- `Part of` membership
+link_targets (name, path)                   -- on-disk names a wikilink may resolve to
+tasks        (doc_id, line_no, description, asset_raw, asset_norm, owner, raised, due, ref, done)
+occurrences  (doc_id, start_utc, end_utc, all_day, tzid, recurrence_id)   -- phase 5
+contacts     (doc_id, fn, sort_name, org, primary_email)                  -- phase 6
+fts          (title, body, doc_id)          -- FTS5
 ```
 
 One `documents` table across all three stores is the load-bearing choice. `store` and `dtype` discriminate, `fields`
@@ -271,6 +275,22 @@ mentions this contact" is one query, not three.
 
 Only fields named in a form as indexed get promoted to columns; everything else lives in `fields` and needs no
 migration when a workspace invents a new key.
+
+Three shapes here differ from the first sketch of this section, each for a reason found by building it:
+
+- **Keyed on an integer, with `path` unique and `uid` unique but nullable**, rather than on the UID. Reading never
+  writes, so a workspace is indexable before it is stamped — the first real workspace had 138 documents and no UIDs at
+  all, and keying on the UID would have meant rewriting every file before the first query. The path is what sync
+  actually works in; the UID is the durable identity links resolve to.
+- **`link_targets` exists** because the index cannot otherwise answer "is this link a placeholder?". A wikilink may
+  legitimately name an attachment that is not a document, and without the on-disk names the register reports real files
+  as unwritten notes.
+- **`fts` is a standalone FTS5 table**, not an external-content one. External content would need the body as a column
+  on `documents` and triggers to keep the two in step; a disposable cache does not need to pay for that.
+
+When two documents claim one title or alias, the index resolves to the greatest path. That is not arbitrary: the alias
+map the renderers use walks documents in path order and lets the last win, and an index that picked the other one would
+answer "which note is `[[X]]`?" differently from the register exported from the same workspace.
 
 ### Incremental sync
 
@@ -293,12 +313,19 @@ contacts.
 | --- | --- |
 | Cold full reindex | < 2 s |
 | Incremental reindex, one document | < 20 ms |
+| Re-sync of an unchanged workspace | < 500 ms |
 | Occurrence re-expansion, one recurring event | < 30 ms |
 | Calendar month range query | < 10 ms |
 | Keystroke to completion list on `[[` | < 50 ms |
 | Launch to usable window | < 1 s |
 
 Full reindex must stay cheap enough that "delete the database" is always an acceptable answer to any index bug.
+
+Measured, not assumed: the first honest measurement missed the incremental budget by nine times, for two reasons worth
+naming because both are easy to reintroduce. Link resolution re-ran over the whole workspace on every save, and the
+"does this file belong to the store?" check walked the entire directory tree to answer a question about one path.
+Frontmatter was also parsed twice per document — once for the fields and once to recover the YAML error — which was
+half the cost of a cold index.
 
 ## 8. Query, views, and folders
 
@@ -658,3 +685,7 @@ reached for and could not find.
 | 8 | `index.db` disposable, `collections.toml` tracked, `state.db` per-machine | Resolves the previous draft's contradiction between "the cache is disposable" and folders being real user data |
 | 9 | Python core, PySide6 UI, headless everything below it | The existing parser ports unchanged; Qt's model/view and calendar widgets match the domain; the CLI keeps the boundary honest |
 | 10 | A tiny form expression language; agents are Python | Avoids reinventing `@formula`, which is the part of Notes nobody misses |
+| 11 | The index is keyed on path, with the UID a nullable unique column | Reading never writes, so a workspace must be indexable before it is stamped |
+| 12 | Ambiguous titles resolve to the greatest path | The renderers' alias map already breaks the tie that way; disagreeing would drift export parity with nothing saying why |
+| 13 | PyYAML's C loader for the happy path, the pure loader for any failure | Halves cold-index cost while keeping the error messages lint parity is measured on byte-identical |
+| 14 | Renderers take the banner's generator as a parameter | Export parity is measured against files naming the legacy script; the default changes in one place when that tool retires |

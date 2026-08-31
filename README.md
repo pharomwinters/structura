@@ -15,13 +15,16 @@ authority; deleting it must lose nothing.
 
 ## Status
 
-Phase 0. No window yet — see the phase table in the design doc. What works:
+Phases 0 and 1 are done. No window yet — see the phase table in the design
+doc. What works:
 
 - The document model, with an immutable ULID on every document.
 - The schema, loaded from `structura.toml` and validated on load.
 - The markdown store: parse, validate, and write back only the bytes that
   changed.
-- `structura lint`, `scan`, and `uid`.
+- The index: SQLite, incremental sync, link resolution, full-text search, and
+  a filesystem watcher.
+- The export renderers, byte-identical to the legacy generated registers.
 
 ## Try it
 
@@ -29,10 +32,18 @@ Phase 0. No window yet — see the phase table in the design doc. What works:
 uv venv && . .venv/bin/activate
 uv pip install -e ".[dev]"
 
-structura lint /path/to/workspace     # schema violations; exit 1 if any
-structura scan /path/to/workspace     # what the store sees
-structura uid  /path/to/workspace     # which documents still need a UID
+structura lint    /path/to/workspace   # schema violations; exit 1 if any
+structura scan    /path/to/workspace   # what the store sees
+structura uid     /path/to/workspace   # which documents still need a UID
+structura reindex /path/to/workspace   # bring the index into step
+structura watch   /path/to/workspace   # reindex on every change
+structura export  /path/to/workspace   # write the generated registers
 ```
+
+The index lives at `<workspace>/.structura/index.db` and is a cache with no
+authority. `structura reindex --rebuild` deletes it first, which is always a
+safe answer to any index problem — if it ever stops being safe, that is the
+bug.
 
 ## Tests
 
@@ -55,6 +66,14 @@ pytest tests/test_parity.py -v
 
 Without those variables the parity tests skip, so CI stays green on a machine
 that does not have the private content.
+
+The performance budget is measured against a 5,000-document workspace and is
+marked `slow`:
+
+```sh
+pytest -m slow          # just the budget
+pytest -m "not slow"    # everything else
+```
 
 ## Licence
 

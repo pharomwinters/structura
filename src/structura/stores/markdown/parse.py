@@ -87,18 +87,56 @@ def grammar(marker: str = "item") -> Grammar:
     return Grammar(marker)
 
 
-def split_frontmatter(text: str) -> tuple[dict, str]:
-    """Return (fields, body). Missing or invalid frontmatter yields ({}, text)."""
+# PyYAML's C loader, when the installed build has one. It parses the same
+# documents several times faster, which matters because frontmatter parsing
+# dominates a cold index of a large workspace.
+#
+# It is used only for the happy path. Its error messages differ from the pure
+# Python loader's, and those messages are part of the validator's output that
+# lint parity is measured on, so **any failure is re-parsed with SafeLoader
+# and that result is authoritative**. A malformed note therefore reports the
+# byte-identical legacy message, and a note the two loaders would disagree
+# about is decided by the one the legacy tool used.
+_FAST_LOADER = getattr(yaml, "CSafeLoader", None)
+
+
+def _load_yaml(block: str) -> tuple[object, str | None]:
+    """Parse a frontmatter block once. Returns (value, error message)."""
+    if _FAST_LOADER is not None:
+        try:
+            return yaml.load(block, Loader=_FAST_LOADER), None
+        except yaml.YAMLError:
+            pass  # fall through so SafeLoader decides, and words it
+    try:
+        return yaml.load(block, Loader=yaml.SafeLoader), None
+    except yaml.YAMLError as exc:
+        return None, str(exc)
+
+
+def read_frontmatter(text: str) -> tuple[dict, str, str | None]:
+    """Return (fields, body, error) from one parse.
+
+    Parsing the block twice -- once for the fields and once to recover the
+    error -- was half the cost of a cold index, so the two callers below are
+    conveniences over this rather than parsers in their own right.
+    """
     match = FRONTMATTER_RE.match(text)
     if not match:
-        return {}, text
-    try:
-        props = yaml.safe_load(match.group(1)) or {}
-    except yaml.YAMLError:
-        return {}, match.group(2)
+        return {}, text, None
+    value, error = _load_yaml(match.group(1))
+    body = match.group(2)
+    if error is not None:
+        return {}, body, error
+    props = value or {}
     if not isinstance(props, dict):
-        return {}, match.group(2)
-    return props, match.group(2)
+        return {}, body, None
+    return props, body, None
+
+
+def split_frontmatter(text: str) -> tuple[dict, str]:
+    """Return (fields, body). Missing or invalid frontmatter yields ({}, text)."""
+    fields, body, _ = read_frontmatter(text)
+    return fields, body
 
 
 def frontmatter_error(text: str) -> str | None:
@@ -111,14 +149,7 @@ def frontmatter_error(text: str) -> str | None:
     parse failure distinctly (R10) instead of burying it under four misleading
     missing-key violations.
     """
-    match = FRONTMATTER_RE.match(text)
-    if not match:
-        return None
-    try:
-        yaml.safe_load(match.group(1))
-    except yaml.YAMLError as exc:
-        return str(exc)
-    return None
+    return read_frontmatter(text)[2]
 
 
 def body_line_offset(text: str) -> int:
@@ -279,7 +310,7 @@ def parse_task_line(line: str, marker: str = "item") -> dict | None:
 def parse_document(path: Path, text: str, marker: str = "item") -> Document:
     """One markdown file, parsed. Never raises: a malformed file becomes a
     document carrying the reason, so one bad note cannot hide the rest."""
-    fields, body = split_frontmatter(text)
+    fields, body, error = read_frontmatter(text)
     title = str(fields.get("title") or path.stem)
     live_body = strip_code_fences(body)
     live_text = strip_code_fences(text)
@@ -295,7 +326,7 @@ def parse_document(path: Path, text: str, marker: str = "item") -> Document:
         body=body,
         raw_text=text,
         links=extract_links(live_body, body_line_offset(text)),
-        frontmatter_error=frontmatter_error(text),
+        frontmatter_error=error,
         live_text=live_text,
     )
 

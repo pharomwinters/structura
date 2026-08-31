@@ -1,6 +1,7 @@
-"""Lint parity against the legacy validator, on real content.
+"""Parity against the legacy tooling, on real content.
 
-This is the phase 0 acceptance gate. Tests 1 and 3 in the design run against
+Acceptance test 2 (lint) is the phase 0 gate; acceptance test 1 (export) is
+half of the phase 1 gate. Tests 1 and 3 in the design run against
 real content rather than fixtures, on the grounds that a tool whose whole job
 is the upkeep of structured notes should be gated on the notes it is for.
 
@@ -19,13 +20,16 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
 
 from structura.core.schema import load_schema
 from structura.core.violations import messages
+from structura.index import Database, Index, Indexer
 from structura.stores.markdown import MarkdownStore
+from structura.views import render
 
 VAULT = os.environ.get("STRUCTURA_LEGACY_VAULT")
 SCRIPTS = os.environ.get("STRUCTURA_LEGACY_SCRIPTS")
@@ -234,3 +238,111 @@ def test_the_seeded_fixture_actually_trips_every_rule(seeded):
         "part-of-not-at-line-start",
         "task-near-miss",
     }
+
+
+# --- Acceptance test 1: export parity ---
+#
+# For each generated register, Structura's export must be byte-identical to
+# the legacy renderer's output for the same workspace. An aggregate match is
+# not sufficient and neither is a diff that "looks fine": these compare whole
+# strings.
+
+RENDER_TODAY = date(2026, 8, 31)
+
+
+@pytest.fixture(scope="module")
+def legacy_render(legacy):
+    sys.path.insert(0, SCRIPTS)
+    try:
+        import render
+    finally:
+        sys.path.pop(0)
+    return render
+
+
+def _register_pairs(legacy_render, legacy, legacy_notes, documents, root):
+    files = legacy.list_vault_filenames(root)
+    return {
+        "Open Items": (
+            legacy_render.render_open_items(legacy_notes, RENDER_TODAY),
+            render.render_open_items(documents, RENDER_TODAY),
+        ),
+        "Assets": (
+            legacy_render.render_assets(legacy_notes, RENDER_TODAY),
+            render.render_assets(documents, RENDER_TODAY),
+        ),
+        "Contacts": (
+            legacy_render.render_contacts(legacy_notes, RENDER_TODAY),
+            render.render_contacts(documents, RENDER_TODAY),
+        ),
+        "Placeholders": (
+            legacy_render.render_placeholders(legacy_notes, RENDER_TODAY, files),
+            render.render_placeholders(documents, RENDER_TODAY, files),
+        ),
+    }
+
+
+@requires_vault
+@pytest.mark.parametrize("register", ["Open Items", "Assets", "Contacts", "Placeholders"])
+def test_export_is_byte_identical(legacy_render, legacy, legacy_notes, documents, root, register):
+    expected, actual = _register_pairs(legacy_render, legacy, legacy_notes, documents, root)[
+        register
+    ]
+    assert actual == expected
+
+
+@requires_vault
+def test_the_registers_are_not_trivially_empty(
+    legacy_render, legacy, legacy_notes, documents, root
+):
+    """Four identical "nothing here" pages would pass the test above and prove
+    nothing."""
+    pairs = _register_pairs(legacy_render, legacy, legacy_notes, documents, root)
+    for name, (expected, _) in pairs.items():
+        assert len(expected) > 400, name
+
+
+@requires_legacy
+@pytest.mark.parametrize("renderer", ["render_open_items", "render_assets", "render_contacts"])
+def test_seeded_fixture_export_is_byte_identical(legacy, legacy_render, seeded, renderer):
+    expected = getattr(legacy_render, renderer)(legacy.load_vault(seeded), RENDER_TODAY)
+    actual = getattr(render, renderer)(MarkdownStore(seeded).documents(), RENDER_TODAY)
+    assert actual == expected
+
+
+@requires_legacy
+def test_seeded_fixture_placeholder_export_is_byte_identical(legacy, legacy_render, seeded):
+    files = legacy.list_vault_filenames(seeded)
+    expected = legacy_render.render_placeholders(legacy.load_vault(seeded), RENDER_TODAY, files)
+    actual = render.render_placeholders(MarkdownStore(seeded).documents(), RENDER_TODAY, files)
+    assert actual == expected
+
+
+# --- Acceptance test 4 against real content ---
+#
+# The property-based half lives in test_index_equivalence.py on generated
+# workspaces. This is the same claim measured where it matters most.
+
+
+@requires_vault
+def test_the_index_agrees_with_the_documents_on_real_content(documents, root):
+    db = Database.in_memory(root)
+    try:
+        store = MarkdownStore(root, load_schema(root))
+        Indexer(db, store).sync()
+        index = Index(db)
+
+        assert index.document_count() == len(documents)
+        assert [d.path for d in index.documents()] == sorted(d.path for d in documents)
+
+        expected_tasks = sorted((doc.path, task.line_no) for doc in documents for task in doc.tasks)
+        assert [(t.path, t.line_no) for t in index.tasks()] == expected_tasks
+
+        expected_placeholders = [(p.target, p.inbound) for p in index.placeholders()]
+        rendered = render.render_placeholders(
+            documents, RENDER_TODAY, frozenset(store.link_target_names())
+        )
+        for target, inbound in expected_placeholders:
+            assert f"| {inbound} | {target} |" in rendered
+    finally:
+        db.close()
