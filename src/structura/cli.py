@@ -25,6 +25,7 @@ import threading
 from datetime import date
 from pathlib import Path
 
+from structura.core.paths import relative_display
 from structura.core.schema import SchemaError, load_schema
 from structura.index import Database, Index, Indexer
 from structura.index.watch import Watcher
@@ -87,7 +88,7 @@ def cmd_uid(workspace: Path, *, apply: bool = False) -> int:
     if not apply:
         print(f"  {len(without)} document(s) have no uid. Re-run with --apply to stamp them:")
         for doc in without[:20]:
-            print(f"    {doc.path.relative_to(store.root)}")
+            print(f"    {relative_display(doc.path, store.root)}")
         if len(without) > 20:
             print(f"    ... and {len(without) - 20} more")
         return 0
@@ -99,19 +100,23 @@ def cmd_uid(workspace: Path, *, apply: bool = False) -> int:
 
 def cmd_reindex(workspace: Path, *, rebuild: bool = False) -> int:
     store = _store(workspace)
-    db = Database(Database.open(workspace).path, workspace=workspace)
-    if rebuild:
-        db.drop()
-    db.ensure()
+    # One Database object, opened once. Building a second one from the first
+    # one's path leaked the first one's writer connection, which is invisible
+    # on Linux and stops `--rebuild` dead on Windows: an open handle cannot be
+    # unlinked there.
+    db = Database.open(workspace)
     try:
+        if rebuild:
+            db.drop()
+            db.ensure()
         report = Indexer(db, store).sync()
         print(f"  {report}")
         for path, message in report.errors:
             print(f"    warn  {path}: {message}", file=sys.stderr)
         print(f"  {Index(db).document_count()} documents indexed")
+        return 1 if report.errors else 0
     finally:
         db.close()
-    return 1 if report.errors else 0
 
 
 def cmd_watch(workspace: Path) -> int:

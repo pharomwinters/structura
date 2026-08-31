@@ -42,7 +42,11 @@ class MarkdownStore:
     name = STORE_NAME
 
     def __init__(self, root: Path, schema: Schema | None = None) -> None:
-        self.root = Path(root)
+        # Resolved once, here. Every path the store hands out is rooted at it
+        # and needs no resolving of its own -- `Path.resolve` costs a
+        # `_getfinalpathname` syscall per call on Windows, and doing it per
+        # file was the largest single cost in a cold index there.
+        self.root = Path(root).resolve()
         self.schema = schema or default_schema()
 
     @property
@@ -74,13 +78,12 @@ class MarkdownStore:
             if not (wanted or linkable):
                 continue
 
-            resolved = path.resolve()
             if wanted:
-                result.notes.append(resolved)
+                result.notes.append(path)
             if linkable:
-                result.link_targets.append((path.name, resolved))
+                result.link_targets.append((path.name, path))
                 if is_markdown:
-                    result.link_targets.append((path.stem, resolved))
+                    result.link_targets.append((path.stem, path))
 
         return result
 
@@ -108,10 +111,23 @@ class MarkdownStore:
             return False
         return path.is_file()
 
+    def read(self, path: Path) -> str:
+        """A document's text, exactly as the bytes say.
+
+        Deliberately not `read_text`, which applies universal newlines and
+        silently turns a CRLF file into an LF one. Structura writes back only
+        the bytes it changed, so a line ending it never saw is a line ending
+        it would destroy on the next save -- on the platform where CRLF files
+        are most likely, which is the one this ships on.
+        """
+        return Path(path).read_bytes().decode("utf-8")
+
+    def parse(self, path: Path, text: str) -> Document:
+        """Parse text already in hand, without touching the disk."""
+        return parse.parse_document(Path(path), text, self._marker)
+
     def load(self, path: Path) -> Document:
-        return parse.parse_document(
-            Path(path), Path(path).read_text(encoding="utf-8"), self._marker
-        )
+        return self.parse(path, self.read(path))
 
     def documents(self) -> list[Document]:
         return [self.load(path) for path in self.paths()]
@@ -160,7 +176,7 @@ class MarkdownStore:
         explicit call for backfilling an existing workspace.
         """
         path = Path(path)
-        text = path.read_text(encoding="utf-8")
+        text = self.read(path)
         updated, uid = serialize.ensure_uid(text)
         if updated != text:
             path.write_text(updated, encoding="utf-8", newline="")

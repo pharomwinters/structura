@@ -273,7 +273,9 @@ class Indexer:
             return
 
         try:
-            doc = self.store.load(resolved)
+            # The bytes are already in hand from hashing; reading the file a
+            # second time to parse it doubled the open() count of a cold index.
+            doc = self.store.parse(resolved, data.decode("utf-8"))
         except (OSError, UnicodeDecodeError) as exc:
             report.errors.append((resolved, str(exc)))
             return

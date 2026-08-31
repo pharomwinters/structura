@@ -10,6 +10,10 @@ on every save, for every note the user merely opened.
 So edits are surgical. A field's value is replaced in its own line. A new field
 is inserted as one new line. Everything else in the file is the bytes that were
 read.
+
+Line endings are part of that promise and are handled per line rather than per
+file, so a CRLF document stays CRLF, an LF document stays LF, and a document
+that is inconsistent with itself is left inconsistent rather than tidied.
 """
 
 from __future__ import annotations
@@ -84,8 +88,18 @@ def set_field(text: str, key: str, value: str) -> str:
             lines[index] = f"{key}:{sep}{value}{carriage}"
             return prefix + "\n".join(lines) + body
 
-    carriage = "\r" if lines and lines[-1].endswith("\r") else ""
-    lines.append(f"{key}: {value}{carriage}")
+    # Appending needs the ending of the line it is appended *after*, and that
+    # line's ending was consumed by the frontmatter regex -- so it is not on
+    # `lines[-1]` to be copied. The body still starts with it, which is exactly
+    # the right place to read it from: it keeps a CRLF file CRLF and a mixed
+    # file mixed, rather than deciding for the whole document from one sample.
+    #
+    # Getting this wrong corrupted the *previous* line rather than the new one,
+    # which is the kind of bug that hides until a platform makes CRLF normal.
+    carriage = "\r" if body.startswith("\r\n") else ""
+    if lines:
+        lines[-1] = lines[-1] + carriage
+    lines.append(f"{key}: {value}")
     return prefix + "\n".join(lines) + body
 
 

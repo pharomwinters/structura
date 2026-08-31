@@ -249,6 +249,8 @@ def test_export_writes_inside_the_workspace(q, workspace):
     written = workspace / "registers" / "Assets.md"
     assert written.exists()
     assert "| Post Rinse 4" in written.read_text()
+    # Forward slashes on every platform: an exported register must be the
+    # same bytes wherever it was produced.
     assert "wrote registers/Assets.md" in result.text
 
 

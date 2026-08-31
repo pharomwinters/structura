@@ -13,7 +13,7 @@ between a roadmap and a typo.
 
 from __future__ import annotations
 
-import os
+from structura.core.paths import relative_display
 
 from . import format as fmt
 from .errors import QueryError, TypeCheckError, did_you_mean
@@ -38,17 +38,7 @@ from .values import coerce, compare, days_since
 # --- row builders -----------------------------------------------------
 
 
-def _relative(path_text: str, prefix: str) -> str:
-    """`path` relative to the workspace, as a string operation.
-
-    `Path.is_relative_to` followed by `Path.relative_to` parses the path twice
-    and was the single largest cost in a query over a large workspace -- more
-    than the SQL. The prefix is computed once per result, so this is a slice.
-    """
-    return path_text[len(prefix) :] if path_text.startswith(prefix) else path_text
-
-
-def _document_row(doc, context, tags: tuple[str, ...] = (), prefix: str = "") -> Row:
+def _document_row(doc, context, tags: tuple[str, ...] = ()) -> Row:
     return Row(
         {
             "title": doc.title,
@@ -60,7 +50,7 @@ def _document_row(doc, context, tags: tuple[str, ...] = (), prefix: str = "") ->
             "tag": tags,
             "tags": tags,
             "uid": doc.uid,
-            "path": _relative(str(doc.path), prefix),
+            "path": relative_display(doc.path, context.workspace),
             "parent": None,
         },
         ref=doc,
@@ -70,10 +60,9 @@ def _document_row(doc, context, tags: tuple[str, ...] = (), prefix: str = "") ->
 def _documents(rows, context) -> Result:
     rows = list(rows)
     by_document = context.index.tags_by_document() if rows else {}
-    prefix = f"{context.workspace}{os.sep}"
     return Result(
         kind=DOCUMENTS,
-        rows=[_document_row(d, context, by_document.get(d.id, ()), prefix) for d in rows],
+        rows=[_document_row(d, context, by_document.get(d.id, ())) for d in rows],
         columns=("title", "type", "area", "status", "date"),
     )
 
@@ -537,7 +526,7 @@ def _export(stage: Stage, incoming: Result, context) -> Result:
     body = incoming.text if incoming.kind == VIEW else fmt.table(incoming)
     target.write_text(body, encoding="utf-8", newline="\n")
     return text_result(
-        f"wrote {target.relative_to(context.workspace)} ({len(incoming.rows)} rows)\n"
+        f"wrote {relative_display(target, context.workspace)} ({len(incoming.rows)} rows)\n"
     )
 
 
