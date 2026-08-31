@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "structura"
+version = "0.0.1"
+description = "A single-user document database with a personal information manager built on it"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+structura = "structura.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/structura"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+# A verbatim port of the legacy validator's test suite. Kept diffable against
+# the original rather than reflowed to this project's line length.
+extend-exclude = ["tests/test_validate_ported.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

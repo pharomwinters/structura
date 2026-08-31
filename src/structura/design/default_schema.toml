@@ -1,0 +1,94 @@
+# Structura's built-in schema.
+#
+# This file is the shipped default for a workspace that has no schema of its
+# own. Its values are byte-equivalent to the constants the legacy validator
+# carried in module scope -- VALID_TYPES, ENUMS, STATUS_ENUMS, REQUIRED_KEYS
+# and TYPE_REQUIRED_KEYS -- and a test asserts that, field for field. If you
+# change a value here you are changing the rules the vault is checked against;
+# that is the point of the schema being data, but it should be a reviewed diff
+# rather than an accident.
+
+[schema]
+required = ["type", "title", "date"]
+types = [
+  "asset",
+  "person",
+  "org",
+  "document",
+  "project",
+  "meeting",
+  "observation",
+  "note",
+  "resource",
+  "index",
+]
+
+[schema.enums]
+area = ["paint", "wwt", "monorail", "power-free", "plant"]
+document_type = [
+  "work-instruction",
+  "sop",
+  "form",
+  "record",
+  "spec",
+  "drawing",
+  "poster",
+]
+# Media types were added for the 2026-08-22 GitLab import: photo sets (spray
+# patterns, work-instruction steps), saved Outlook messages, and the PFMEA
+# browser tool's own files.
+document_format = [
+  "docx",
+  "xlsx",
+  "pptx",
+  "pdf",
+  "tex",
+  "typ",
+  "jpg",
+  "png",
+  "msg",
+  "json",
+  "html",
+]
+resource_type = ["link", "pdf", "vendor-doc", "datasheet", "standard", "reference"]
+category = ["Friends", "Family", "Co-Worker", "Employee", "Vendor"]
+org_type = ["internal", "vendor", "customer"]
+
+[schema.status]
+asset = ["operating", "degraded", "down", "removed"]
+observation = ["open", "contained", "resolved"]
+project = ["planning", "active", "on-hold", "complete", "cancelled"]
+
+# Keys required only for a particular `type:` (legacy Ruling R35).
+#
+# `area` is required on asset notes specifically because an item's group is
+# resolved through its ASSET's area, falling back to the source note's area
+# only when the asset supplies none. An asset note with no `area` therefore
+# silently misfiles every item that references it -- filing the work wherever
+# it happened to be written down rather than where the equipment is -- and
+# nothing in the rendered register says so. Making the key required turns a
+# silent misfiling into a loud schema violation.
+[schema.required_for]
+asset = ["area"]
+
+[markdown]
+# The inline task marker. `item` is the legacy spelling and stays the default
+# so existing content keeps parsing; the design doc calls these tasks, and the
+# marker is configurable so a workspace can say `task` without a migration.
+task_marker = "item"
+
+# Directories not parsed as notes. `0-Index` is generated output and reading
+# it back would double-count every item; `6-Archive` is superseded material
+# whose items must not appear as open. Dot-directories are skipped generically
+# by a leading-`.` check on every path component (legacy Ruling R13), not
+# named here one by one.
+skip = ["0-Index", "6-Archive", "docs", "node_modules"]
+
+# Directories skipped when collecting legitimate LINK TARGETS, as opposed to
+# notes to parse (legacy Ruling R36). "Do not parse this as a note" and "this
+# is not a resolvable link target" are separate claims and they come apart for
+# `0-Index/`: the generated files must stay out of the note scan, but
+# `0-Index/Open Items.md` is a real file that a wikilink resolves against, so
+# excluding it here would report the deliverable's own embed target as an
+# unwritten note.
+link_target_skip = ["6-Archive", "docs", "node_modules"]
