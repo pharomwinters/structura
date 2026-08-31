@@ -20,6 +20,7 @@ from structura.stores.markdown import MarkdownStore
 DOCUMENTS = 5000
 COLD_BUDGET_S = 2.0
 INCREMENTAL_BUDGET_S = 0.020
+QUERY_BUDGET_S = 0.250
 
 pytestmark = pytest.mark.slow
 
@@ -111,5 +112,34 @@ def test_a_query_over_the_big_workspace_is_immediate(big_workspace):
 
         assert len(results) == DOCUMENTS
         assert elapsed < 0.5, f"full-text search took {elapsed * 1000:.0f} ms"
+    finally:
+        db.close()
+
+
+def test_a_pipeline_over_the_whole_workspace_is_within_budget(big_workspace):
+    """`find` filters over rows rather than pushing equality into SQL, because
+    the two paths compared text differently and an optimisation is not worth a
+    wrong answer. This is what that costs, so phase 3 knows what it is buying
+    if it brings the pushdown back behind a test that proves the paths agree.
+    """
+    from structura.query import Context, run
+
+    db = Database.in_memory(big_workspace)
+    try:
+        context = Context(workspace=big_workspace, store=MarkdownStore(big_workspace), db=db)
+        context.sync()
+
+        for pipeline in (
+            "find type:note | count",
+            "tasks open age>30 | count",
+            "find type:note | backlinks | count",
+        ):
+            started = time.perf_counter()
+            run(pipeline, context)
+            elapsed = time.perf_counter() - started
+            assert elapsed < QUERY_BUDGET_S, (
+                f"`{pipeline}` took {elapsed * 1000:.0f} ms over {DOCUMENTS} documents, "
+                f"budget is {QUERY_BUDGET_S * 1000:.0f} ms"
+            )
     finally:
         db.close()

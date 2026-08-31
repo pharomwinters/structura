@@ -87,3 +87,39 @@ def indexer(db, store) -> Indexer:
 def index(indexer) -> Index:
     indexer.sync()
     return Index(indexer.db)
+
+
+@pytest.fixture
+def context(workspace, db, store):
+    """A query context over the fixture workspace, already indexed."""
+    from datetime import date
+
+    from structura.query import Context
+
+    ctx = Context(workspace=workspace, store=store, db=db, today=date(2026, 8, 31))
+    ctx.sync()
+    return ctx
+
+
+@pytest.fixture
+def q(context):
+    """Run a pipeline and hand back the result."""
+    from structura.query import run
+
+    def execute(text: str):
+        return run(text, context)
+
+    return execute
+
+
+@pytest.fixture
+def rows(q):
+    """Run a pipeline and hand back the rows' values."""
+
+    def execute(text: str, field: str | None = None):
+        result = q(text)
+        if field is None:
+            return [row.values for row in result.rows]
+        return [row.get(field) for row in result.rows]
+
+    return execute

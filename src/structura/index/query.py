@@ -68,6 +68,14 @@ class Placeholder:
 
 _DOC_COLUMNS = "d.id, d.path, d.uid, d.dtype, d.title, d.date, d.area, d.status"
 
+# SQLite's default parameter ceiling is generous on current builds and was 999
+# on older ones. Chunking costs nothing and removes the question.
+_CHUNK = 500
+
+
+def _chunks(values: list[int]) -> list[list[int]]:
+    return [values[i : i + _CHUNK] for i in range(0, len(values), _CHUNK)] or [[]]
+
 
 class Index:
     """Queries over one index. Cheap to construct; holds no open cursor."""
@@ -145,6 +153,18 @@ class Index:
             out.setdefault(row["key"], []).append(row["value"])
         return out
 
+    def tags_by_document(self) -> dict[int, tuple[str, ...]]:
+        """Every document's tags, in one query.
+
+        The alternative is a query per document while building rows, which is
+        the shape of a loop that looks fine on a fixture and is unusable on a
+        real workspace.
+        """
+        out: dict[int, list[str]] = {}
+        for row in self._rows("SELECT doc_id, tag FROM tags ORDER BY doc_id, tag"):
+            out.setdefault(row["doc_id"], []).append(row["tag"])
+        return {doc_id: tuple(tags) for doc_id, tags in out.items()}
+
     def tags(self) -> dict[str, int]:
         return {
             row["tag"]: row["n"]
@@ -166,15 +186,20 @@ class Index:
         ]
 
     def backlinks(self, doc_id: int) -> list[DocumentRow]:
-        return [
-            DocumentRow.of(row)
-            for row in self._rows(
-                f"SELECT DISTINCT {_DOC_COLUMNS} FROM links l "
-                "JOIN documents d ON d.id = l.doc_id "
-                "WHERE l.target_id = ? ORDER BY d.path",
-                (doc_id,),
-            )
-        ]
+        return self.backlinks_many([doc_id])
+
+    def backlinks_many(self, doc_ids: list[int]) -> list[DocumentRow]:
+        """Every document linking to any of these, deduplicated.
+
+        One query for the whole set rather than one per document: `find | backlinks`
+        over a large workspace was issuing thousands of queries and spending
+        three quarters of its time doing it.
+        """
+        return self._many(
+            "SELECT DISTINCT {cols} FROM links l JOIN documents d ON d.id = l.doc_id "
+            "WHERE l.target_id IN ({holes})",
+            doc_ids,
+        )
 
     def orphans(self) -> list[DocumentRow]:
         """Documents nothing links to."""
@@ -257,15 +282,33 @@ class Index:
     # --- structure ----------------------------------------------------
 
     def children(self, doc_id: int) -> list[DocumentRow]:
-        return [
-            DocumentRow.of(row)
-            for row in self._rows(
-                f"SELECT DISTINCT {_DOC_COLUMNS} FROM parents p "
-                "JOIN documents d ON d.id = p.doc_id "
-                "WHERE p.target_id = ? ORDER BY d.title",
-                (doc_id,),
-            )
-        ]
+        return self.children_many([doc_id])
+
+    def children_many(self, doc_ids: list[int]) -> list[DocumentRow]:
+        return self._many(
+            "SELECT DISTINCT {cols} FROM parents p JOIN documents d ON d.id = p.doc_id "
+            "WHERE p.target_id IN ({holes})",
+            doc_ids,
+        )
+
+    def parents_many(self, doc_ids: list[int]) -> list[DocumentRow]:
+        """The documents these name as a parent, already resolved."""
+        return self._many(
+            "SELECT DISTINCT {cols} FROM parents p JOIN documents d ON d.id = p.target_id "
+            "WHERE p.doc_id IN ({holes})",
+            doc_ids,
+        )
+
+    def _many(self, template: str, doc_ids: list[int]) -> list[DocumentRow]:
+        if not doc_ids:
+            return []
+        seen: dict[int, DocumentRow] = {}
+        for chunk in _chunks(list(doc_ids)):
+            sql = template.format(cols=_DOC_COLUMNS, holes=",".join("?" * len(chunk)))
+            for row in self._rows(sql, tuple(chunk)):
+                found = DocumentRow.of(row)
+                seen.setdefault(found.id, found)
+        return sorted(seen.values(), key=lambda d: d.path)
 
     def parents(self, doc_id: int) -> list[str]:
         return [

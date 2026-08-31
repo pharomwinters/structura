@@ -11,6 +11,8 @@ workspace, watch it, lint it, and export the registers.
     structura reindex  [workspace]     bring the index into step
     structura watch    [workspace]     reindex on every change until interrupted
     structura export   [workspace]     write the generated registers
+    structura query    <pipeline>      run one pipeline and print the result
+    structura shell    [workspace]     the interactive prompt
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from pathlib import Path
 from structura.core.schema import SchemaError, load_schema
 from structura.index import Database, Index, Indexer
 from structura.index.watch import Watcher
+from structura.query import Context, QueryError
 from structura.stores.markdown import MarkdownStore
 from structura.views import render
 
@@ -159,6 +162,29 @@ def cmd_export(workspace: Path, *, out: Path | None = None, today: date | None =
     return 0
 
 
+def cmd_query(workspace: Path, pipeline: str, *, sync: bool = True) -> int:
+    from structura.query import run
+    from structura.repl import render
+
+    with Context.open(workspace) as context:
+        if sync:
+            context.sync()
+        try:
+            sys.stdout.write(render(run(pipeline, context)))
+        except QueryError as exc:
+            print(f"structura: {exc.render()}", file=sys.stderr)
+            return 1
+    return 0
+
+
+def cmd_shell(workspace: Path) -> int:
+    from structura.repl import Repl
+
+    with Context.open(workspace) as context:
+        context.sync()
+        return Repl(context).run()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="structura", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -170,6 +196,7 @@ def main(argv: list[str] | None = None) -> int:
         ("reindex", "bring the index into step with the files"),
         ("watch", "reindex on every change until interrupted"),
         ("export", "write the generated registers"),
+        ("shell", "the interactive prompt"),
     ):
         child = sub.add_parser(name, help=help_text)
         child.add_argument("workspace", nargs="?", default=".", type=Path)
@@ -189,6 +216,11 @@ def main(argv: list[str] | None = None) -> int:
                 "--today", type=date.fromisoformat, help="date to render as (YYYY-MM-DD)"
             )
 
+    query = sub.add_parser("query", help="run one pipeline and print the result")
+    query.add_argument("pipeline", help='e.g. "tasks open | sort age desc | table"')
+    query.add_argument("-w", "--workspace", default=".", type=Path)
+    query.add_argument("--no-sync", action="store_true", help="query the index as it stands")
+
     args = parser.parse_args(argv)
     workspace = args.workspace.resolve()
 
@@ -205,6 +237,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_watch(workspace)
         if args.command == "export":
             return cmd_export(workspace, out=args.out, today=args.today)
+        if args.command == "query":
+            return cmd_query(workspace, args.pipeline, sync=not args.no_sync)
+        if args.command == "shell":
+            return cmd_shell(workspace)
     except SchemaError as exc:
         print(f"structura: schema error: {exc}", file=sys.stderr)
         return 2

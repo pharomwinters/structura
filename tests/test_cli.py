@@ -86,3 +86,31 @@ def test_a_broken_schema_fails_loudly_rather_than_checking_nothing(workspace, ca
 def test_export_uses_todays_date_by_default(workspace):
     main(["export", str(workspace)])
     assert f"date: {date.today().isoformat()}" in (workspace / "0-Index" / "Assets.md").read_text()
+
+
+# --- phase 2: the query commands ---
+
+
+def test_query_runs_one_pipeline(workspace, capsys):
+    assert main(["query", "-w", str(workspace), "find type:asset | list title"]) == 0
+    assert "- Post Rinse 4" in capsys.readouterr().out
+
+
+def test_query_reports_a_bad_pipeline_and_exits_one(workspace, capsys):
+    assert main(["query", "-w", str(workspace), "where type:asset"]) == 1
+    assert "cannot start a pipeline" in capsys.readouterr().err
+
+
+def test_query_syncs_first_by_default(workspace, capsys, write_note):
+    """A query that answers from a stale index is a query that lies."""
+    write_note(workspace, "2-Notes/Fresh.md")
+    assert main(["query", "-w", str(workspace), "find title:Fresh | count"]) == 0
+    assert capsys.readouterr().out.strip() == "1"
+
+
+def test_no_sync_answers_from_the_index_as_it_stands(workspace, capsys, write_note):
+    main(["reindex", str(workspace)])
+    capsys.readouterr()
+    write_note(workspace, "2-Notes/Fresh.md")
+    main(["query", "-w", str(workspace), "--no-sync", "find title:Fresh | count"])
+    assert capsys.readouterr().out.strip() == "0"

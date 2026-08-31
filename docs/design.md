@@ -317,6 +317,7 @@ contacts.
 | Occurrence re-expansion, one recurring event | < 30 ms |
 | Calendar month range query | < 10 ms |
 | Keystroke to completion list on `[[` | < 50 ms |
+| A pipeline over the whole workspace | < 250 ms |
 | Launch to usable window | < 1 s |
 
 Full reindex must stay cheap enough that "delete the database" is always an acceptable answer to any index bug.
@@ -352,14 +353,30 @@ grep "riser pressure" | open
 
 Verbs, grouped. Signatures are `input → output`.
 
-| Group | Verbs |
-| --- | --- |
-| Sources | `find` `grep` `tasks` `events` `contacts` `placeholders` `orphans` `folder` |
-| Traversal | `links` `backlinks` `children` `parent` |
-| Plumbing | `where` `sort` `group` `head` `count` `distinct` |
-| Render | `table` `list` `tree` `calendar` `cards` |
-| Action | `open` `new` `set` `tag` `untag` `move` `delete` `file` `unfile` `export` `wrap` |
-| Meta | `view` `lint` `reindex` `workspace` `git` `help` |
+| Group | Verbs | Signature |
+| --- | --- | --- |
+| Sources | `find` `grep` `orphans` | – → documents |
+| | `tasks` | – → tasks |
+| | `placeholders` | – → placeholders |
+| | `events` `contacts` `folder` | – → occurrences / contacts / documents |
+| Traversal | `backlinks` `children` `parents` | documents → documents |
+| | `links` | documents → links |
+| Plumbing | `where` `sort` `head` `distinct` `group` | rows → the same rows |
+| | `count` | rows → text |
+| Render | `table` `list` `tree` `calendar` `cards` | rows → view |
+| Action | `open` `new` `set` `tag` `untag` `move` `delete` `file` `unfile` `wrap` | documents → – |
+| | `export` | rows or view → text |
+| Meta | `view` `lint` `reindex` `workspace` `git` `help` | – → text |
+
+Two things about the types are worth stating rather than leaving to be discovered. **`links` produces links and `backlinks`
+produces documents**, and the asymmetry is real: an outbound link may point at nothing, so it cannot be a document,
+while every document that links to you exists by definition. And **"any rows" means any rows and deliberately not
+`text` or `view`**: those are what a pipeline ends with, so `lint | table` and `find | table | sort title` fail at the
+prompt instead of quietly rendering a rendering.
+
+Verbs the design promises but a phase has not delivered are registered as promised rather than absent, so the prompt
+says "`set` is not available yet -- it arrives in phase 4" instead of "unknown verb". A roadmap and a typo should not
+look alike.
 
 No escape to a system shell. Nothing spawns a subprocess except a controlled VCS call with explicit arguments.
 
@@ -689,3 +706,7 @@ reached for and could not find.
 | 12 | Ambiguous titles resolve to the greatest path | The renderers' alias map already breaks the tie that way; disagreeing would drift export parity with nothing saying why |
 | 13 | PyYAML's C loader for the happy path, the pure loader for any failure | Halves cold-index cost while keeping the error messages lint parity is measured on byte-identical |
 | 14 | Renderers take the banner's generator as a parameter | Export parity is measured against files naming the legacy script; the default changes in one place when that tool retires |
+| 15 | "Any rows" excludes `text` and `view` | They are what a pipeline ends with; letting them through made `lint \| table` type-check |
+| 16 | `find` filters over rows rather than pushing equality into SQL | The two paths compared text differently, so `find area:PAINT` and `find \| where area:PAINT` disagreed. An optimisation is not worth a wrong answer; it can return behind a test that proves the paths agree |
+| 17 | A multi-valued field matches on membership | `tag:pressure` against a document with three tags is a membership question, and the alternative is a special case per field in every caller |
+| 18 | Unavailable verbs are registered as promised, not omitted | A roadmap and a typo should not produce the same error |
