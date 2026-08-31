@@ -692,8 +692,13 @@ schema is, so a third variant needs no code change.
 
 **All of it lands in phase 3, the ANSI half included.** The REPL exists already and could be coloured sooner, but
 splitting a theme across two phases means picking the token roles twice and reconciling them later; doing both halves
-against one loaded palette is the cheaper order. Until then the command line prints plain text, which is what a piped
-result wants anyway.
+against one loaded palette is the cheaper order.
+
+Two rules turned out to be load-bearing rather than polish. Colour is applied to *rendered* text, never inside the
+formatter — `export` writes what the formatter produced and that output is compared byte for byte against the legacy
+renderer, so an escape sequence upstream would fail export parity. And a test asserts that no functional colour reaches
+either the document pane's stylesheet or the highlighter, because "chrome only" is the kind of rule that decays into a
+comment nobody reads.
 
 ## 14. Testing, packaging, and order of work
 
@@ -814,3 +819,7 @@ reached for and could not find.
 | 19 | Nótt & Dagr is the colour scheme, taken as specified | The spec has already answered contrast, ANSI mapping and what italic means; answering them again would be volunteering to get them wrong |
 | 20 | Tags take the Purple role on the markdown surface | The role's own occupant -- instance reserved words -- cannot occur there, so the slot is vacant rather than contested |
 | 21 | Theme tokens are data, one file per variant | The same rule the schema follows: a third variant should not need a code change |
+| 22 | Documents are read as bytes, never through `read_text` | Universal newlines turned a CRLF file into an LF one, so a save destroyed a line ending Structura never saw -- on the platform where CRLF is normal |
+| 23 | Displayed paths are forward-slashed on every platform | An exported register is compared byte for byte, and a saved view is shared between machines |
+| 24 | The document buffer is headless, and the pane wraps it | Acceptance test 3 is about opening and saving, not about a widget; the window should hold nothing worth testing |
+| 25 | Qt is confined to `structura.ui`, and the window is an optional extra | The CLI must install and run on a machine with no Qt, which is what keeps the boundary real rather than declared |

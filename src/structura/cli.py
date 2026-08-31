@@ -13,6 +13,7 @@ workspace, watch it, lint it, and export the registers.
     structura export   [workspace]     write the generated registers
     structura query    <pipeline>      run one pipeline and print the result
     structura shell    [workspace]     the interactive prompt
+    structura gui      [workspace]     the window
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from structura.index import Database, Index, Indexer
 from structura.index.watch import Watcher
 from structura.query import Context, QueryError
 from structura.stores.markdown import MarkdownStore
+from structura.theme import SYSTEM, VARIANTS
 from structura.views import render
 
 REGISTERS = {
@@ -190,6 +192,22 @@ def cmd_shell(workspace: Path) -> int:
         return Repl(context).run()
 
 
+def cmd_gui(workspace: Path, theme: str) -> int:
+    # Imported here, not at module scope: the CLI must keep working on a
+    # machine with no Qt installed, and say so usefully rather than failing to
+    # import at all.
+    try:
+        from structura.ui import run as run_window
+    except ImportError as exc:  # pragma: no cover - depends on the install
+        print(
+            f"structura: the window needs PySide6, which is not installed ({exc}).\n"
+            f"           install it with: pip install 'structura[gui]'",
+            file=sys.stderr,
+        )
+        return 3
+    return run_window(workspace, theme)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="structura", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -202,9 +220,17 @@ def main(argv: list[str] | None = None) -> int:
         ("watch", "reindex on every change until interrupted"),
         ("export", "write the generated registers"),
         ("shell", "the interactive prompt"),
+        ("gui", "the window"),
     ):
         child = sub.add_parser(name, help=help_text)
         child.add_argument("workspace", nargs="?", default=".", type=Path)
+        if name == "gui":
+            child.add_argument(
+                "--theme",
+                default=SYSTEM,
+                choices=[*VARIANTS, SYSTEM],
+                help="nott (dark), dagr (light), or follow the desktop",
+            )
         if name == "uid":
             child.add_argument("--apply", action="store_true", help="write the UIDs")
         if name == "lint":
@@ -246,6 +272,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_query(workspace, args.pipeline, sync=not args.no_sync)
         if args.command == "shell":
             return cmd_shell(workspace)
+        if args.command == "gui":
+            return cmd_gui(workspace, args.theme)
     except SchemaError as exc:
         print(f"structura: schema error: {exc}", file=sys.stderr)
         return 2

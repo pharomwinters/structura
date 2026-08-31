@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import os
+
+# Set before anything can import PySide6: the UI tests run without a
+# display, on a developer's machine and on a CI runner alike.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 from pathlib import Path
 
 import pytest

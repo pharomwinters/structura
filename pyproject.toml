@@ -15,10 +15,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The window. Kept optional so the CLI, the index and the query pipeline
+# install and run on a machine with no Qt -- which is what having a second
+# consumer below the UI is for.
+gui = [
+    "PySide6-Essentials>=6.7",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
     "hypothesis>=6.100",
+    "PySide6-Essentials>=6.7",
+    "pytest-qt>=4.4",
 ]
 
 [project.scripts]

@@ -25,6 +25,7 @@ jobs:
         run: uv run ruff format --check src tests
 
       - name: Test
+        # The UI tests need a Qt platform plugin but not a display.
         # The performance budgets in the design are targets for the machine a
         # person works on. A shared runner is slower and noisier, so asserting
         # them unscaled here measures the runner, not Structura: two runs
@@ -33,4 +34,5 @@ jobs:
         # the remaining insurance against a bad runner, not a way of passing.
         env:
           STRUCTURA_PERF_SCALE: "1.5"
+          QT_QPA_PLATFORM: offscreen
         run: uv run pytest -q

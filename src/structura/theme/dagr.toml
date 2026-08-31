@@ -1,0 +1,59 @@
+# Dagr — the light half of the pair. Named for the Norse personification of
+# Day, son of Nótt. Morning-light-on-parchment: a warm cream ground with
+# deepened, earthier counterparts of the same accent roles.
+#
+# The role architecture is identical to Nótt's, which is the point: switching
+# preserves meaning rather than merely inverting lightness.
+
+name = "Dagr"
+variant = "light"
+
+[editor]
+background = "#F5F1E4"
+current_line = "#EDE9DB"
+selection = "#C9D1DF"
+foreground = "#1F2330"
+comment = "#6B6A58"
+red = "#B53D3A"
+orange = "#8F5C18"
+yellow = "#6E601A"
+green = "#3A6525"
+cyan = "#2B6A8A"
+purple = "#5B4A9E"
+pink = "#A84272"
+
+[surface]
+floating = "#EDE9DB"
+lighter = "#FBF8EC"
+light = "#E6E1D1"
+dark = "#D2CEC0"
+darker = "#BCB8AB"
+
+[functional]
+red = "#A0351F"
+orange = "#8C6E0E"
+green = "#2A6E3F"
+cyan = "#1A5B8F"
+purple = "#4F3B95"
+
+[ansi]
+black = "#F5F1E4"
+red = "#B53D3A"
+green = "#3A6525"
+yellow = "#6E601A"
+blue = "#5B4A9E"
+magenta = "#A84272"
+cyan = "#2B6A8A"
+white = "#1F2330"
+bright_black = "#6B6A58"
+bright_red = "#C04E4B"
+bright_green = "#477A2F"
+bright_yellow = "#847224"
+bright_blue = "#6E5BBC"
+bright_magenta = "#C14F86"
+bright_cyan = "#3680A5"
+bright_white = "#2A2D3B"
+
+[accessibility]
+comment_aa = "#5A594A"
+shadow = "rgba(12, 15, 22, 0.08)"

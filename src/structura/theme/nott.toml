@@ -1,0 +1,62 @@
+# Nótt — the dark half of the pair. Named for the Norse personification of
+# Night. Aurora-over-night-sky: a cool petrol-slate ground with desaturated
+# accent hues.
+#
+# Values are transcribed from docs/theme.md and a test asserts they match it,
+# so the specification stays the source and this file stays a copy of it.
+
+name = "Nótt"
+variant = "dark"
+
+[editor]
+background = "#1A1F2E"
+current_line = "#262C3F"
+selection = "#3D4457"
+foreground = "#E6E4DA"
+comment = "#757C90"
+red = "#E35F5B"
+orange = "#E8A25C"
+yellow = "#E6DC82"
+green = "#8DC776"
+cyan = "#6EB8D6"
+purple = "#A692D6"
+pink = "#DE80A4"
+
+[surface]
+floating = "#262C3F"
+lighter = "#30374A"
+light = "#242A3B"
+dark = "#13171F"
+darker = "#0C0F16"
+
+[functional]
+red = "#C74A35"
+orange = "#A88714"
+green = "#3E8855"
+cyan = "#2E7AB5"
+purple = "#6B52B8"
+
+[ansi]
+black = "#13171F"
+red = "#E35F5B"
+green = "#8DC776"
+yellow = "#E6DC82"
+blue = "#A692D6"
+magenta = "#DE80A4"
+cyan = "#6EB8D6"
+white = "#E6E4DA"
+bright_black = "#757C90"
+bright_red = "#EC7A77"
+bright_green = "#A5D690"
+bright_yellow = "#EFE69D"
+bright_blue = "#C0B1E6"
+bright_magenta = "#E89AB7"
+bright_cyan = "#95CCE3"
+bright_white = "#F5F3EC"
+
+[accessibility]
+# The comment colour sits at ~3.9:1 here. Comments are intentionally
+# de-emphasised, but an implementation targeting strict AA throughout uses
+# this instead.
+comment_aa = "#878EA1"
+shadow = "rgba(0, 0, 0, 0.15)"

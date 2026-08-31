@@ -17,8 +17,9 @@ authority; deleting it must lose nothing.
 
 ## Status
 
-Phases 0, 1 and 2 are done. No window yet — see the phase table in the design
-doc. What works:
+Phases 0-3 are done. There is a window.
+
+What works:
 
 - The document model, with an immutable ULID on every document.
 - The schema, loaded from `structura.toml` and validated on load.
@@ -29,6 +30,8 @@ doc. What works:
 - The export renderers, byte-identical to the legacy generated registers.
 - The command line: a typed pipeline over the index, checked before it runs,
   with saved views and a headless REPL.
+- The window: three panes, a navigator, a source editor that saves without
+  reformatting, and the Nótt & Dagr palette.
 
 ## Try it
 
@@ -43,6 +46,7 @@ structura reindex /path/to/workspace   # bring the index into step
 structura watch   /path/to/workspace   # reindex on every change
 structura export  /path/to/workspace   # write the generated registers
 structura shell   /path/to/workspace   # the interactive prompt
+structura gui     /path/to/workspace   # the window
 structura query -w /path/to/workspace "tasks open | sort age desc | table"
 ```
 
@@ -115,6 +119,44 @@ marked `slow`:
 pytest -m slow          # just the budget
 pytest -m "not slow"    # everything else
 ```
+
+## The window
+
+```sh
+uv pip install -e ".[gui,dev]"
+structura gui /path/to/workspace --theme nott   # or dagr, or system
+```
+
+Three panes and a command bar. The navigator lists folders, saved views, tags
+and standing registers; the view pane shows whatever the last pipeline
+produced, whatever kind of rows those are; the document pane is source mode,
+and the only mode you type in.
+
+| Key | | Key | |
+| --- | --- | --- | --- |
+| `Ctrl+L` | focus the command line | `Ctrl+S` | save |
+| `Ctrl+O` | quick open by title | `Ctrl+B` | backlinks of this document |
+| `F5` | reindex | `Alt+←` `→` | navigation history |
+| `Ctrl+1/2/3` | Notes / Calendar / Contacts | | |
+
+Calendar and Contacts are present and disabled, and say which phase they
+arrive in — a roadmap and a missing feature should not look alike.
+
+**Saving never reformats.** Opening every document and saving it unedited
+leaves the working tree empty; that is an acceptance test, over CRLF, LF and
+mixed line endings, files with no trailing newline, tabs, trailing spaces and
+unicode. If a document changed on disk while you were editing it, saving asks
+— reload, overwrite, or save a copy — with the on-disk time shown.
+
+## Colours
+
+[Nótt & Dagr](docs/theme.md), loaded as data — one TOML per variant, so a
+third is a file rather than a code change. Nótt is the default; `--theme dagr`
+or `--theme system` for the others.
+
+The command line uses the ANSI half of the same palette, and only when stdout
+is a terminal: `structura query ... > file.md` writes clean markdown, and
+`NO_COLOR` turns colour off regardless.
 
 ## Licence
 
