@@ -677,8 +677,12 @@ Two rules that are cheaper to build in than to retrofit: colour is emitted only 
 #### Where it lands
 
 Theme tokens are **data, not constants** — one TOML file per variant under the shipped design, loaded the way the
-schema is, so a third variant needs no code change. The palette arrives with the window in phase 3; the ANSI half can
-land sooner, because the REPL already exists.
+schema is, so a third variant needs no code change.
+
+**All of it lands in phase 3, the ANSI half included.** The REPL exists already and could be coloured sooner, but
+splitting a theme across two phases means picking the token roles twice and reconciling them later; doing both halves
+against one loaded palette is the cheaper order. Until then the command line prints plain text, which is what a piped
+result wants anyway.
 
 ## 14. Testing, packaging, and order of work
 
