@@ -14,6 +14,7 @@ workspace, watch it, lint it, and export the registers.
     structura query    <pipeline>      run one pipeline and print the result
     structura shell    [workspace]     the interactive prompt
     structura gui      [workspace]     the window
+    structura licenses                 this program's licence and what it bundles
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from structura.core.paths import relative_display
 from structura.core.schema import SchemaError, load_schema
 from structura.index import Database, Index, Indexer
 from structura.index.watch import Watcher
+from structura.licensing import notices
 from structura.query import Context, QueryError
 from structura.stores.markdown import MarkdownStore
 from structura.theme import SYSTEM, VARIANTS
@@ -208,6 +210,11 @@ def cmd_gui(workspace: Path, theme: str) -> int:
     return run_window(workspace, theme)
 
 
+def cmd_licenses() -> int:
+    sys.stdout.write(notices())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="structura", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -247,12 +254,16 @@ def main(argv: list[str] | None = None) -> int:
                 "--today", type=date.fromisoformat, help="date to render as (YYYY-MM-DD)"
             )
 
+    sub.add_parser("licenses", help="this program's licence and what it bundles")
+
     query = sub.add_parser("query", help="run one pipeline and print the result")
     query.add_argument("pipeline", help='e.g. "tasks open | sort age desc | table"')
     query.add_argument("-w", "--workspace", default=".", type=Path)
     query.add_argument("--no-sync", action="store_true", help="query the index as it stands")
 
     args = parser.parse_args(argv)
+    if args.command == "licenses":
+        return cmd_licenses()
     workspace = args.workspace.resolve()
 
     try:

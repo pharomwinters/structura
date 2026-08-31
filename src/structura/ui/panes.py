@@ -382,6 +382,7 @@ class AppSwitcher(QWidget):
     """
 
     switched = Signal(str)
+    about_requested = Signal()
 
     def __init__(self, available: tuple[str, ...] = ("notes",)) -> None:
         super().__init__()
@@ -409,4 +410,15 @@ class AppSwitcher(QWidget):
             self.buttons[key] = button
 
         layout.addStretch(1)
+
+        # GPLv3 §5(d): an interactive interface has to offer the legal notices
+        # somewhere convenient and prominent. Pinned to the bottom of the one
+        # piece of chrome that is always on screen, and also on F1.
+        self.about = QToolButton()
+        self.about.setText("?")
+        self.about.setFixedSize(QSize(52, 32))
+        self.about.setToolTip("About Structura — licence and notices (F1)")
+        self.about.clicked.connect(self.about_requested.emit)
+        layout.addWidget(self.about)
+
         self.buttons["notes"].setChecked(True)

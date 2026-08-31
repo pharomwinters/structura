@@ -370,6 +370,49 @@ def test_reindex_reports(started):
     assert "unchanged" in started.status.text()
 
 
+# --- the legal notices ------------------------------------------------
+
+
+def test_the_about_button_is_always_on_screen(started):
+    """GPLv3 section 5(d) wants the notices somewhere convenient and
+    prominent, so the button lives on the one piece of chrome that never
+    goes away."""
+    assert started.switcher.about.isVisible() or started.switcher.about.isEnabled()
+    assert "licence" in started.switcher.about.toolTip().lower()
+
+
+def test_the_about_button_asks_for_the_notices(app, qtbot):
+    from structura.ui.panes import AppSwitcher
+
+    switcher = AppSwitcher()
+    qtbot.addWidget(switcher)
+    with qtbot.waitSignal(switcher.about_requested, timeout=1000):
+        switcher.about.click()
+
+
+def test_the_about_dialog_carries_the_notices(started, monkeypatch):
+    """Built rather than shown: exec() would block, and what is being tested
+    is the content, not Qt's modal loop."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from structura.licensing import COPYRIGHT
+
+    seen = {}
+
+    def capture(self):
+        seen["text"] = self.text()
+        seen["detail"] = self.detailedText()
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", capture)
+    started.show_about()
+
+    assert COPYRIGHT in seen["text"]
+    assert "NO WARRANTY" in seen["text"]
+    assert "LGPL-3.0-only" in seen["detail"]
+    assert "Replacing Qt" in seen["detail"]
+
+
 # --- the stylesheet ---------------------------------------------------
 
 

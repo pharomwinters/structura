@@ -167,4 +167,17 @@ is a terminal: `structura query ... > file.md` writes clean markdown, and
 
 ## Licence
 
-MIT.
+**GPL-3.0-or-later.** The full text is in [`LICENSE`](LICENSE).
+
+Structura bundles Qt, used under the **LGPL-3.0-only** — the option that
+obliges us to keep Qt replaceable, which is why builds ship as a directory or
+a native installer and never as a one-file freeze. What ships, under what
+terms, and how to swap Qt out is in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md), and the running program
+will tell you itself:
+
+```sh
+structura licenses
+```
+
+This program comes with ABSOLUTELY NO WARRANTY.

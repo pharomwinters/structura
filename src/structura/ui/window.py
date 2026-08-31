@@ -25,6 +25,7 @@ from structura.app import ConflictError, DocumentBuffer
 from structura.core.paths import relative_display
 from structura.index import Indexer
 from structura.index.watch import Watcher
+from structura.licensing import PROJECT, about, notices
 from structura.query import Context, QueryError, Result, complete, run
 from structura.query.views import load_views
 from structura.theme import Theme, load
@@ -115,6 +116,7 @@ class MainWindow(QMainWindow):
         self.command.submitted.connect(self.run_pipeline)
         self.editor.save_requested.connect(self.save_document)
         self.switcher.switched.connect(self._switch_app)
+        self.switcher.about_requested.connect(self.show_about)
 
     def _actions(self) -> None:
         def act(shortcut: str, slot, name: str) -> None:
@@ -128,6 +130,7 @@ class MainWindow(QMainWindow):
         act("Ctrl+O", self.quick_open, "Quick open")
         act("Ctrl+B", self.show_backlinks, "Backlinks")
         act("F5", self.reindex, "Reindex")
+        act("F1", self.show_about, "About")
         act("Alt+Left", self.go_back, "Back")
         act("Alt+Right", self.go_forward, "Forward")
         act("Ctrl+1", lambda: self._switch_app("notes"), "Notes")
@@ -329,6 +332,22 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._refresh_navigator)
         if self.buffer is not None and self.buffer.disk_changed():
             self.status.say(f"{self.buffer.path.name} changed on disk", "busy")
+
+    # --- the legal notices ------------------------------------------------
+
+    def show_about(self) -> None:
+        """Appropriate Legal Notices, as GPLv3 §5(d) requires of an
+        interactive interface: the copyright, the absence of warranty, the
+        licence, and how to read it. The full third-party notice is behind
+        the details button rather than in the dialog, so the short form
+        stays readable.
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle(f"About {PROJECT}")
+        box.setText(about())
+        box.setDetailedText(notices())
+        box.setStandardButtons(QMessageBox.StandardButton.Close)
+        box.exec()
 
     # --- applications -----------------------------------------------------
 

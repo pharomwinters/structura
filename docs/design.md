@@ -63,9 +63,13 @@ Ordered by how much they decide.
    the design gets simpler because of this, and the design should keep cashing that in rather than quietly spending it.
 3. **The engine is generic; the applications are design.** A special case written into engine code is a bug against
    this constraint.
-4. **The shipped artifact is a self-contained desktop executable.** Dependencies are resolved and frozen at build time,
-   so the application keeps working regardless of the local runtime environment.
-5. **Existing content keeps working.** The markdown record model, its validator, and its generated views migrate
+4. **The shipped artifact is a self-contained desktop application.** Dependencies are resolved at build time, so it
+   keeps working regardless of the local runtime environment — as a directory or a native installer, never a one-file
+   freeze, for the reason in §14.
+5. **Structura is GPL-3.0-or-later.** Qt is used under the LGPL, which obliges us to keep it replaceable. That is not a
+   tax: the same obligation is what makes the packaging honest, and a tool that keeps your notes in plain files should
+   not be one you can be locked out of.
+6. **Existing content keeps working.** The markdown record model, its validator, and its generated views migrate
    without a rewrite of the content.
 
 ## 3. The model
@@ -235,15 +239,16 @@ CLI is not a toy, it is a second consumer that proves the boundary is real.
 
 ### Stack
 
-Python core with a **PySide6/Qt** desktop UI, frozen to a single executable.
+Python core with a **PySide6/Qt** desktop UI, distributed as a native installer per platform.
 
 Qt earns its place on the specifics: `QCalendarWidget` and the model/view framework map almost one to one onto month
-grids and view columns, `QTextDocument` handles rich text, and the whole thing freezes cleanly. Two things to watch,
-named now rather than discovered at release: Qt's default look needs deliberate styling to not feel like 2009 — which
-is what the theme in §13 is for, applied as a stylesheet rather than left to the platform — and
-**PySide6's LGPL terms need checking against single-file freezing** for an open-source release — dynamic linking is the
-condition, and a one-file bundle unpacks before it links, which is probably fine and should be confirmed rather than
-assumed. This is tracked as an open question in §15.
+grids and view columns, `QTextDocument` handles rich text, and only `QtCore`, `QtGui` and `QtWidgets` are actually
+imported. Qt's default look needs deliberate styling not to feel like 2009, which is what the theme in §13 is for,
+applied as a stylesheet rather than left to the platform.
+
+**Only the Qt Essentials modules ship.** The Addons are a licensing question rather than a dependency one: Qt Charts,
+Qt Data Visualization and Qt 3D are offered under the GPL or a commercial licence rather than the LGPL, so reaching for
+one changes what Structura may be distributed as. If a later phase wants a chart, it draws one.
 
 ## 7. The index
 
@@ -727,13 +732,24 @@ The definition of done is parity, and an aggregate match is not sufficient — o
 ### Packaging
 
 Two artifacts, one source tree. Development is a lockfile-pinned project run from source; distribution is a
-single executable built by CI on every push and tag: install from lockfile → full test suite including parity gates →
-format check → freeze → upload artifact, attach to release on tag.
+native installer per platform, built by CI on every push and tag: install from lockfile → full test suite including
+parity gates → format check → build → upload artifact, attach to release on tag.
 
-Three things about a frozen app are cheaper to design for than to debug: package data (default design, templates,
-schema) must be explicitly bundled; SQLite with FTS5 must be frozen in so full-text search is a property of the build
-rather than the workstation; and Qt plugin paths must be verified in the frozen bundle, because a missing platform
-plugin fails at launch with a message that explains nothing.
+**Never a one-file freeze.** This is a licensing decision before it is a packaging one. Qt is used under the LGPL,
+which requires that a user can replace it and run the result; a fused single executable makes that impractical, and
+"they could rebuild it from source" is a weaker answer than "they can swap the file". A directory or a native installer
+keeps the Qt libraries where a person can reach them, and costs nothing worth having. Because each platform's installer
+has to be built on that platform, this is three CI jobs rather than one.
+
+macOS has a wrinkle worth naming now: a signed and notarised bundle refuses to launch once a bundled library is
+replaced, because the signature no longer matches. That is the platform's doing rather than the licence's, and the
+answer — re-sign locally, or rebuild — belongs in the notices rather than in a support thread.
+
+Four things about a packaged app are cheaper to design for than to debug: package data (default design, schema,
+templates, and both theme variants) must be explicitly bundled; SQLite with FTS5 must be present so full-text search is
+a property of the build rather than the workstation; Qt plugin paths must be verified in the built bundle, because a
+missing platform plugin fails at launch with a message that explains nothing; and the licence texts and third-party
+notices have to travel with the binary, because that is a condition of shipping it at all.
 
 ### Order of work
 
@@ -782,9 +798,6 @@ reached for and could not find.
 
 ### Open questions
 
-- **PySide6 licensing under a one-file freeze.** LGPL requires the user be able to relink Qt. A frozen bundle unpacks
-  and dynamically links at runtime, which is probably compliant, but an open-source release should confirm this rather
-  than assume it. The fallback is a directory-style distribution instead of one file.
 - **Whether unread marks are worth their weight.** They were load-bearing in Notes because Notes was a mail-shaped
   application. For notes and events they may be noise. Cheap to add in phase 4, hard to remove once relied on.
 - **How much expression language forms actually need.** `visible_when` may be enough; computed fields may pull the
@@ -823,3 +836,7 @@ reached for and could not find.
 | 23 | Displayed paths are forward-slashed on every platform | An exported register is compared byte for byte, and a saved view is shared between machines |
 | 24 | The document buffer is headless, and the pane wraps it | Acceptance test 3 is about opening and saving, not about a widget; the window should hold nothing worth testing |
 | 25 | Qt is confined to `structura.ui`, and the window is an optional extra | The CLI must install and run on a machine with no Qt, which is what keeps the boundary real rather than declared |
+| 26 | Structura is GPL-3.0-or-later | A tool whose whole argument is that your notes stay yours should not be one you can be locked out of |
+| 27 | Qt is taken under the LGPL, not the GPL option it also offers | The GPL option carries fewer obligations, and that is the argument against it: the LGPL is what obliges us to keep Qt replaceable |
+| 28 | Never a one-file freeze; directory or native installer | A fused executable makes the relinking right impractical, and "they could rebuild from source" is weaker than "they can swap the file" |
+| 29 | Only the Qt Essentials modules ship | Several Addons are GPL-or-commercial rather than LGPL, so reaching for one is a licence change wearing the costume of a dependency change |
