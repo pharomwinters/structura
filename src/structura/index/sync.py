@@ -126,6 +126,11 @@ class Indexer:
         # those changes could have altered.
         self._touched_ids: set[int] = set()
         self._touched_names: set[str] = set()
+        # Child rows waiting to be written. One `executemany` per table for a
+        # whole batch, rather than six per document: at 5,000 documents that
+        # was 30,000 round trips into SQLite and the single largest cost left
+        # in a cold index after the path work.
+        self._pending: dict[str, list[tuple]] = {}
 
     def expect(self, path: Path, sha: str) -> None:
         self._expected[Path(path).resolve()] = sha
@@ -137,9 +142,12 @@ class Indexer:
         started = time.perf_counter()
         report = SyncReport()
         conn = self.db.writer
+        self._pending.clear()
 
         scan = self.store.scan()
-        on_disk = {path.resolve(): path for path in scan.notes}
+        # Already resolved by the scan, once per file. Resolving here again
+        # would triple the cost of the walk for no change in behaviour.
+        on_disk = {path: path for path in scan.notes}
         known = {
             Path(row["path"]): (row["id"], row["mtime_ns"], row["size"], row["sha256"])
             for row in conn.execute("SELECT id, path, mtime_ns, size, sha256 FROM documents")
@@ -149,11 +157,17 @@ class Indexer:
         try:
             for resolved, path in on_disk.items():
                 self._sync_one(conn, resolved, path, known.get(resolved), report)
+                if report.added + report.updated and not (
+                    (report.added + report.updated) % self.FLUSH_EVERY
+                ):
+                    self._flush(conn)
 
             gone = set(known) - set(on_disk)
             for path in gone:
                 conn.execute("DELETE FROM documents WHERE path = ?", (str(path),))
                 report.removed += 1
+
+            self._flush(conn)
 
             self._refresh_link_targets(conn, scan)
             if report.changed:
@@ -176,6 +190,7 @@ class Indexer:
         started = time.perf_counter()
         report = SyncReport()
         conn = self.db.writer
+        self._pending.clear()
         self._touched_ids = set()
         self._touched_names = set()
 
@@ -199,6 +214,7 @@ class Indexer:
                 self._sync_one(conn, resolved, resolved, known, report)
                 self._touch_link_target(conn, resolved)
 
+            self._flush(conn)
             if report.changed:
                 self._resolve(conn, self._touched_ids, self._touched_names)
             conn.execute("COMMIT")
@@ -273,6 +289,34 @@ class Indexer:
 
     # --- writing ------------------------------------------------------
 
+    _INSERTS = {
+        "fields": "INSERT INTO fields (doc_id, key, value, ord) VALUES (?, ?, ?, ?)",
+        "tags": "INSERT INTO tags (doc_id, tag) VALUES (?, ?)",
+        "aliases": "INSERT INTO aliases (alias, doc_id) VALUES (?, ?)",
+        "links": (
+            "INSERT INTO links (doc_id, target_raw, target_norm, section, is_embed, line_no) "
+            "VALUES (?, ?, ?, ?, ?, ?)"
+        ),
+        "parents": "INSERT INTO parents (doc_id, target_norm, ord) VALUES (?, ?, ?)",
+        "tasks": (
+            "INSERT INTO tasks (doc_id, line_no, description, asset_raw, asset_norm, owner, "
+            "raised, due, ref, done) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ),
+        "fts": "INSERT INTO fts (title, body, doc_id) VALUES (?, ?, ?)",
+    }
+
+    #: Flush every this many documents, so indexing a very large workspace
+    #: does not hold every child row in memory at once.
+    FLUSH_EVERY = 2000
+
+    def _flush(self, conn) -> None:
+        """Write the queued child rows. Inside the caller's transaction, so a
+        flush is not a commit and a failure still rolls the whole pass back."""
+        for table, rows in self._pending.items():
+            if rows:
+                conn.executemany(self._INSERTS[table], rows)
+        self._pending.clear()
+
     def _record_names(self, conn, doc_id: int) -> None:
         """Remember the names a document was answering to before it is deleted.
 
@@ -308,66 +352,47 @@ class Indexer:
         )
         doc_id = cursor.lastrowid
 
-        conn.executemany(
-            "INSERT INTO fields (doc_id, key, value, ord) VALUES (?, ?, ?, ?)",
-            [
-                (doc_id, key, value, ord_)
-                for key, raw in doc.fields.items()
-                for ord_, value in enumerate(_scalars(raw))
-            ],
+        queue = self._pending.setdefault
+        queue("fields", []).extend(
+            (doc_id, key, value, ord_)
+            for key, raw in doc.fields.items()
+            for ord_, value in enumerate(_scalars(raw))
         )
-        conn.executemany(
-            "INSERT INTO tags (doc_id, tag) VALUES (?, ?)",
-            [(doc_id, tag) for tag in extract_tags(doc.fields)],
+        queue("tags", []).extend((doc_id, tag) for tag in extract_tags(doc.fields))
+        # An alias equal to the title is one name, not two.
+        queue("aliases", []).extend(
+            (name, doc_id) for name in _dedupe([doc.title, *extract_aliases(doc)])
         )
-        conn.executemany(
-            "INSERT INTO aliases (alias, doc_id) VALUES (?, ?)",
-            # An alias equal to the title is one name, not two.
-            [(name, doc_id) for name in _dedupe([doc.title, *extract_aliases(doc)])],
+        queue("links", []).extend(
+            (
+                doc_id,
+                link.target,
+                strip_section(link.target),
+                link_section(link.target),
+                int(link.is_embed),
+                link.line_no,
+            )
+            for link in doc.links
         )
-        conn.executemany(
-            "INSERT INTO links (doc_id, target_raw, target_norm, section, is_embed, line_no) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    doc_id,
-                    link.target,
-                    strip_section(link.target),
-                    link_section(link.target),
-                    int(link.is_embed),
-                    link.line_no,
-                )
-                for link in doc.links
-            ],
+        queue("parents", []).extend(
+            (doc_id, strip_section(name), i) for i, name in enumerate(doc.parents)
         )
-        conn.executemany(
-            "INSERT INTO parents (doc_id, target_norm, ord) VALUES (?, ?, ?)",
-            [(doc_id, strip_section(name), i) for i, name in enumerate(doc.parents)],
+        queue("tasks", []).extend(
+            (
+                doc_id,
+                task.line_no,
+                task.description,
+                task.asset,
+                strip_section(task.asset) if task.asset else None,
+                task.owner,
+                task.raised.isoformat() if task.raised else None,
+                task.due.isoformat() if task.due else None,
+                task.ref,
+                int(task.done),
+            )
+            for task in doc.tasks
         )
-        conn.executemany(
-            "INSERT INTO tasks "
-            "(doc_id, line_no, description, asset_raw, asset_norm, owner, raised, due, ref, done) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    doc_id,
-                    task.line_no,
-                    task.description,
-                    task.asset,
-                    strip_section(task.asset) if task.asset else None,
-                    task.owner,
-                    task.raised.isoformat() if task.raised else None,
-                    task.due.isoformat() if task.due else None,
-                    task.ref,
-                    int(task.done),
-                )
-                for task in doc.tasks
-            ],
-        )
-        conn.execute(
-            "INSERT INTO fts (title, body, doc_id) VALUES (?, ?, ?)",
-            (doc.title, doc.body, doc_id),
-        )
+        queue("fts", []).append((doc.title, doc.body, doc_id))
 
         self._touched_ids.add(doc_id)
         self._touched_names.update(_dedupe([doc.title, *extract_aliases(doc)]))
@@ -382,7 +407,7 @@ class Indexer:
         conn.execute("DELETE FROM link_targets")
         conn.executemany(
             "INSERT OR IGNORE INTO link_targets (name, path) VALUES (?, ?)",
-            [(name, str(path.resolve())) for name, path in scan.link_targets],
+            [(name, str(path)) for name, path in scan.link_targets],
         )
 
     def _touch_link_target(self, conn, path: Path) -> None:

@@ -25,6 +25,11 @@ class Scan:
     walks doubled the traversal on every full sync for no reason.
     """
 
+    #: Paths are resolved exactly once, here, and every consumer uses them as
+    #: they are. `Path.resolve` walks the tree with `lstat` per component, and
+    #: resolving the same file again for its stem and a third time in the sync
+    #: loop was the largest single cost in a cold index of a large workspace --
+    #: more than parsing the YAML.
     notes: list[Path] = field(default_factory=list)
     #: (name, providing path) -- a markdown file supplies both its filename and
     #: its stem; anything else supplies only its filename (legacy R31).
@@ -64,13 +69,18 @@ class MarkdownStore:
             dotted = any(part.startswith(".") for part in parts)
             is_markdown = path.suffix.lower() == ".md"
 
-            if is_markdown and not dotted and not any(part in skip for part in parts):
-                result.notes.append(path)
+            wanted = is_markdown and not dotted and not any(part in skip for part in parts)
+            linkable = not dotted and not any(part in link_skip for part in parts)
+            if not (wanted or linkable):
+                continue
 
-            if not dotted and not any(part in link_skip for part in parts):
-                result.link_targets.append((path.name, path))
+            resolved = path.resolve()
+            if wanted:
+                result.notes.append(resolved)
+            if linkable:
+                result.link_targets.append((path.name, resolved))
                 if is_markdown:
-                    result.link_targets.append((path.stem, path))
+                    result.link_targets.append((path.stem, resolved))
 
         return result
 

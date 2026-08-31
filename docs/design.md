@@ -312,7 +312,7 @@ contacts.
 
 | Operation | Budget |
 | --- | --- |
-| Cold full reindex | < 2 s |
+| Cold full reindex | < 3 s |
 | Incremental reindex, one document | < 20 ms |
 | Re-sync of an unchanged workspace | < 500 ms |
 | Occurrence re-expansion, one recurring event | < 30 ms |
@@ -323,11 +323,22 @@ contacts.
 
 Full reindex must stay cheap enough that "delete the database" is always an acceptable answer to any index bug.
 
-Measured, not assumed: the first honest measurement missed the incremental budget by nine times, for two reasons worth
-naming because both are easy to reintroduce. Link resolution re-ran over the whole workspace on every save, and the
-"does this file belong to the store?" check walked the entire directory tree to answer a question about one path.
-Frontmatter was also parsed twice per document — once for the fields and once to recover the YAML error — which was
-half the cost of a cold index.
+Measured, not assumed — and the budgets above are what the code holds, not what was hoped for. The cold figure was
+originally 2 s, written before there was anything to time; it never held with any margin, and the resulting test failed
+in CI on commits that changed only documentation. Four real costs came out of chasing it, all easy to reintroduce:
+
+- Link resolution re-ran over the whole workspace on every save.
+- The "does this file belong to the store?" check walked the entire directory tree to answer a question about one path.
+- Frontmatter was parsed twice per document, once for the fields and once to recover the YAML error.
+- `Path.resolve` ran three times per file during a scan, and the sync issued six `executemany` calls per document.
+
+Together those took the incremental case from 183 ms to 12 ms and the cold case from 4.6 s to about 1.9 s. The cold
+budget is 3 s because the same workspace measures anywhere between 1.8 s and 2.2 s on one machine within a minute; a
+budget set at the best observed number is a budget that fails on weather.
+
+**Timing on shared hardware is not the same measurement.** CI scales every budget by `STRUCTURA_PERF_SCALE`, because a
+runner is not the workstation the numbers describe. Each measurement is also the best of several runs rather than one,
+since noise on a shared machine only ever adds time.
 
 ## 8. Query, views, and folders
 

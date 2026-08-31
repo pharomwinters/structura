@@ -25,4 +25,12 @@ jobs:
         run: uv run ruff format --check src tests
 
       - name: Test
+        # The performance budgets in the design are targets for the machine a
+        # person works on. A shared runner is slower and noisier, so asserting
+        # them unscaled here measures the runner, not Structura: two runs
+        # failed on commits that changed only documentation. The budgets
+        # themselves were also re-set against real measurements; this scale is
+        # the remaining insurance against a bad runner, not a way of passing.
+        env:
+          STRUCTURA_PERF_SCALE: "1.5"
         run: uv run pytest -q
