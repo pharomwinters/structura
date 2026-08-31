@@ -239,7 +239,8 @@ Python core with a **PySide6/Qt** desktop UI, frozen to a single executable.
 
 Qt earns its place on the specifics: `QCalendarWidget` and the model/view framework map almost one to one onto month
 grids and view columns, `QTextDocument` handles rich text, and the whole thing freezes cleanly. Two things to watch,
-named now rather than discovered at release: Qt's default look needs deliberate styling to not feel like 2009, and
+named now rather than discovered at release: Qt's default look needs deliberate styling to not feel like 2009 — which
+is what the theme in §13 is for, applied as a stylesheet rather than left to the platform — and
 **PySide6's LGPL terms need checking against single-file freezing** for an open-source release — dynamic linking is the
 condition, and a one-file bundle unpacks before it links, which is probably fine and should be confirmed rather than
 assumed. This is tracked as an open question in §15.
@@ -594,6 +595,91 @@ config, so a personal and a work workspace can disagree about their schemas enti
 copy, with the on-disk modification time shown. No silent clobbering. Git is the merge tool; Structura never commits
 implicitly.
 
+### Appearance
+
+**The colour scheme is Nótt & Dagr**, the paired dark/light themes specified in
+[`docs/theme.md`](theme.md). Nótt (dark) is the default; Dagr (light) and "follow the operating system" are the other
+two settings. The two share one role architecture, so switching preserves meaning rather than merely inverting
+lightness.
+
+Taking an existing, specified theme rather than inventing one is the same decision as taking the existing parser: the
+spec has already answered the questions — contrast ratios, ANSI mapping, what italic means — and answering them again
+would be volunteering to get them wrong. It also means Structura looks like the rest of the ecosystem it belongs to
+rather than like a tool that happened to be written second.
+
+#### Surfaces
+
+The theme's UI layers map onto the panes directly. Elevation is surface-based, never a drop shadow.
+
+| Surface | Token |
+| --- | --- |
+| Application switcher, window chrome | Background dark |
+| Navigator | Background light |
+| View pane, document pane | Background |
+| Property/form pane, completion overlay | Floating interactive elements |
+| Command bar | Background lighter |
+| Status line | Background dark, text in Comment |
+| Pane separators | Current line |
+| Selected row, active line | Selection / Current line |
+| Focus ring | Functional Purple |
+
+#### Editor tokens
+
+The spec's roles are written for code; the editor shows markdown whose schema is expressed in the text itself. The
+mapping is by **meaning**, as the spec's consistency rule requires — a key is the same kind of thing whether it is a
+storage modifier or a frontmatter key.
+
+| What it is in a document | Role | Reasoning |
+| --- | --- | --- |
+| Frontmatter delimiters, table pipes, blockquote marks | Comment | Structure, deliberately de-emphasised |
+| Frontmatter key, task metadata key (`owner:`, `raised:`) | Pink | The schema's vocabulary — the keyword role |
+| A closed-enum value (`status: contained`) | Cyan | A value from a named set is a type |
+| A date value | Orange | The constant role |
+| Free-text value, code span, fenced block | Yellow | The string role |
+| A value outside its enum | Red | The error role, plus the gutter marker below |
+| Wikilink `[[Target]]` that resolves | Cyan | A reference to a named entity |
+| Wikilink that resolves to nothing | Cyan, dotted underline | A placeholder is a feature, not an error |
+| Heading | Purple bold | The spec's own special rule 1 puts headings in Purple |
+| Tag `#tag` | Purple | See below |
+| Task marker (`#item`), checkbox brackets, `Part of` | Pink | Grammar words, so the keyword role |
+| A completed task's `x` | Green | Done is a success, not a keyword |
+| Body prose, identifiers | Foreground | The fallback, as the spec requires |
+
+**On reusing Purple.** The spec assigns Purple to instance reserved words — `self`, `this`, `Self`. Markdown has none,
+so the role is vacant on this surface rather than in conflict, and tags take it. That is a deliberate reassignment on a
+surface where the original role cannot occur, not a collision; a code fence inside a note still highlights by the
+spec's rules, `self` included.
+
+**Lint violations are never a background wash.** A violation is a red wavy underline plus a gutter marker, so the rule
+about not relying on colour alone holds and a note with three problems is still readable.
+
+**Functional colours never appear in the document pane.** They are chrome: state indicators, destructive actions,
+borders, the focus ring. On a document surface they would outshout the content, which is what the spec warns about.
+
+#### The command line
+
+`structura shell` prints to a terminal, so it uses the ANSI palette, with the spec's Blue→Purple and Magenta→Pink
+mapping so a piped result and an editor pane agree about what a link looks like.
+
+| Output | ANSI token |
+| --- | --- |
+| Verbs and keys in an echoed pipeline | AnsiMagenta |
+| Table headers | AnsiWhite, bold |
+| Counts and ages | AnsiYellow |
+| A link cell that resolves / does not | AnsiCyan / AnsiBrightBlack |
+| The em dash standing for an empty cell | AnsiBrightBlack |
+| An error message and its caret | AnsiRed |
+| A "did you mean" suggestion | AnsiBrightBlack |
+
+Two rules that are cheaper to build in than to retrofit: colour is emitted only when stdout is a terminal, so
+`structura query ... > file.md` writes clean markdown; and `NO_COLOR` in the environment turns it off regardless.
+
+#### Where it lands
+
+Theme tokens are **data, not constants** — one TOML file per variant under the shipped design, loaded the way the
+schema is, so a third variant needs no code change. The palette arrives with the window in phase 3; the ANSI half can
+land sooner, because the REPL already exists.
+
 ## 14. Testing, packaging, and order of work
 
 ### Acceptance tests
@@ -710,3 +796,6 @@ reached for and could not find.
 | 16 | `find` filters over rows rather than pushing equality into SQL | The two paths compared text differently, so `find area:PAINT` and `find \| where area:PAINT` disagreed. An optimisation is not worth a wrong answer; it can return behind a test that proves the paths agree |
 | 17 | A multi-valued field matches on membership | `tag:pressure` against a document with three tags is a membership question, and the alternative is a special case per field in every caller |
 | 18 | Unavailable verbs are registered as promised, not omitted | A roadmap and a typo should not produce the same error |
+| 19 | Nótt & Dagr is the colour scheme, taken as specified | The spec has already answered contrast, ANSI mapping and what italic means; answering them again would be volunteering to get them wrong |
+| 20 | Tags take the Purple role on the markdown surface | The role's own occupant -- instance reserved words -- cannot occur there, so the slot is vacant rather than contested |
+| 21 | Theme tokens are data, one file per variant | The same rule the schema follows: a third variant should not need a code change |

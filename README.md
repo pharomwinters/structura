@@ -3,7 +3,9 @@
 A single-user document database with a personal information manager built on it.
 Open source, local-first, offline, and deliberately not a mail client.
 
-The design in [`docs/design.md`](docs/design.md) explains the whole thing. The
+The design in [`docs/design.md`](docs/design.md) explains the whole thing, and
+[`docs/theme.md`](docs/theme.md) specifies Nótt & Dagr, the paired dark/light
+colour scheme it uses. The
 short version: documents are bags of fields, a form says how you edit one, a
 view is a selection plus columns evaluated live, and an agent is code that runs
 over a set of documents. Notes, calendar, contacts, and tasks are all built out
