@@ -1,12 +1,28 @@
-"""Shared workspace fixtures."""
+"""Shared workspace fixtures, and the guard that keeps Qt optional."""
 
 from __future__ import annotations
 
 import os
 
-# Set before anything can import PySide6: the UI tests run without a
-# display, on a developer's machine and on a CI runner alike.
+# Set before anything can import PySide6: the UI tests need a platform
+# plugin but not a display, on a developer's machine and on a runner alike.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+# The window is an optional extra, so a default install has no Qt and no
+# pytest-qt. Ignoring the file is what makes `pytest` work anyway; the
+# alternative is every UI test erroring on a missing `qtbot` fixture.
+#
+# If PySide6 is installed but will not import -- its shared objects need
+# system libraries a bare Linux box may lack, `libEGL.so.1` being the
+# usual one -- pytest-qt's own configure hook fails before this file is
+# read, and `pytest -p no:pytest-qt` is the way through. CI installs those
+# libraries and then asserts Qt imports, so that case cannot pass quietly
+# here.
+collect_ignore: list[str] = []
+try:
+    import PySide6.QtGui  # noqa: F401
+except Exception:  # ImportError, or an OSError from a missing shared object
+    collect_ignore.append("test_ui.py")
 
 from pathlib import Path
 

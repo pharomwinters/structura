@@ -122,10 +122,17 @@ pytest -m "not slow"    # everything else
 
 ## The window
 
+The window is an optional extra, so the CLI, the index and the query pipeline
+install and run on a machine with no Qt:
+
 ```sh
 uv pip install -e ".[gui,dev]"
 structura gui /path/to/workspace --theme nott   # or dagr, or system
 ```
+
+Without the `gui` extra the UI tests are skipped rather than erroring, and
+everything else runs. On a bare Linux box PySide6 also needs
+`libegl1 libgl1 libxkbcommon0 libdbus-1-3 libfontconfig1`.
 
 Three panes and a command bar. The navigator lists folders, saved views, tags
 and standing registers; the view pane shows whatever the last pipeline

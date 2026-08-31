@@ -20,13 +20,16 @@ dependencies = [
 # consumer below the UI is for.
 gui = [
     "PySide6-Essentials>=6.7",
+    # The Qt test harness lives here rather than in `dev` on purpose: a
+    # default developer install then never pulls a Qt that might not
+    # import, and pytest-qt's own configure hook cannot take the suite
+    # down over a package only one test file uses.
+    "pytest-qt>=4.4",
 ]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
     "hypothesis>=6.100",
-    "PySide6-Essentials>=6.7",
-    "pytest-qt>=4.4",
 ]
 
 [project.scripts]
