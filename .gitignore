@@ -1,6 +1,16 @@
-.structura/
-*.db
+# Index cache — disposable, rebuilt from files
+.structura/index.db
+.structura/index.db-*
+.structura/state.db
+.structura/state.db-*
+.structura/history
+
+# NOT ignored: .structura/collections.toml is real user data (folder membership)
+
 __pycache__/
+*.py[cod]
 .venv/
 dist/
 build/
+*.spec
+.pytest_cache/

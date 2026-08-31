@@ -1,565 +1,660 @@
 # Structura
 
-This document is a product design for a structured knowledge work environment. It describes an editing surface for
-markdown-based records, a data model built around notes, links, and item records, and a command-driven interface that
-makes the underlying rules explicit rather than incidental.
+Structura is a single-user document database with a personal information manager built on it. It is an open-source
+answer to the question "what was Lotus Notes actually good at, and can you have that without the server, the lock-in,
+and the mail?"
 
-The goal is to replace a patchwork of editor conveniences with a single focused tool that keeps the source files as the
-truth, while making the rules of the content model hard to violate.
+The answer this design gives: yes, if you keep four ideas and throw away everything else. Documents are bags of fields.
+A form says how you edit one. A view is a selection plus columns, evaluated live and therefore never stale. An agent is
+code that runs over a set of documents. Everything Structura ships — notes, calendar, contacts, tasks — is built out of
+those four ideas rather than beside them.
+
+What it is not is a mail client. Outlook and Thunderbird exist and are good. A PIM needs a calendar and an address
+book; it does not need a fifth inbox.
 
 ---
 
-## 1. Problem and goals
+## 1. The shape of the product
 
-The existing workflow works well enough for a small and careful team, but it depends on a general-purpose editor plus a
-set of separate scripts and generated views. The result is a system that is correct only when the right steps are
-remembered in order.
+The single most important framing decision, because everything else follows from it:
 
-Structura is the product that turns those rules into a first-class experience: a structured note editor and query tool
-that treats the working files as the document store and provides the missing capabilities of a purpose-built workspace.
+**Structura is an engine plus three built-in applications, not three applications that share a window.**
 
-| Missing today                 | Structura supplies                                                         |
-| ----------------------------- | -------------------------------------------------------------------------- |
-| A query engine                | A local index rebuilt from the files, with typed query commands            |
-| Live views                    | Saved queries evaluated when opened, never stale                           |
-| Structure-aware editing       | Autocomplete for links and enums, with forms for metadata and item records |
-| One surface for the whole job | Navigate, query, edit, preview, and manage the register from one window    |
+| Layer | What it is | Ships in v1 |
+| --- | --- | --- |
+| Engine | Documents, fields, UIDs, stores, index, query pipeline, forms, views, folders | Yes |
+| Applications | Notes/Journal, Calendar, Contacts — each a set of document types, forms, and views | Yes, three of them |
+| User applications | Your own document types and forms, written against the same machinery | Not in v1, but nothing blocks it |
 
-The thesis, in one sentence: the validator is a list of rules the editor should have enforced — every rule it checks is
-a mistake that was possible to make. Structura moves each rule from detected to impossible, while keeping validation as
-a backstop for anything edited outside the tool.
+The engine is generic. The three applications are *design*, expressed as data in the workspace, not special cases in
+the code. That means the form designer and user-defined types can arrive later without a redesign — and it means the
+built-in applications are worked examples of how a user application would be written.
 
-Concretely, several validation rules stop being reachable from inside Structura:
+This framing is what makes the calendar and the address book belong. They are not features bolted onto a note editor.
+They are the second and third documents types, and the machinery that finds a note by area is the machinery that finds
+next Tuesday's meetings.
 
-- A wikilink cannot land in frontmatter, because frontmatter is edited as typed fields, not as free text.
-- A closed enum cannot accept an invalid value, because the choice comes from the schema.
-- An item line cannot miss the grammar, because items are composed structurally and then serialized.
-- An item cannot be wrapped by a formatter into losing a required field, because the app does not rewrite lines it did
-  not ask you to edit.
+### What Structura takes from Notes, and what it refuses
 
-## 2. What "shell emulator" means here
+| Notes idea | Structura |
+| --- | --- |
+| A document is a bag of named items | Kept. Documents are field bags; storage format varies by store |
+| A form defines how a document is edited | Kept, as data in the workspace |
+| A view is a formula plus columns, never a stored copy | Kept, and it is the best idea in the whole system |
+| A folder is mutable membership, not a query | Kept, and distinct from views |
+| An agent runs over a document collection | Kept, deferred to a later phase, designed for now |
+| Response hierarchy | Kept, as a parent UID on any document |
+| The client is where you build the application | Kept in spirit; the form designer is post-v1 |
+| `@formula` and LotusScript | Refused. A small expression language for forms, real Python for agents |
+| NSF as an opaque proprietary container | Refused. Files are the truth, in standard formats |
+| ACLs, reader/author fields, encryption | Refused. Single user. The privacy control is the filesystem |
+| Replication | Refused as a subsystem. Git is the replicator; CalDAV sync is a documented external tool |
+| Mail | Refused permanently. Use a mail client |
 
-This phrase needs a precise definition before development begins, because it has two common readings and only one is
-wanted.
-
-**Not this:** a terminal emulator that runs a full operating-system shell inside the app. That introduces a large,
-platform-specific, security-relevant subsystem and would reintroduce dependencies the product is trying to avoid.
-
-**This:** a domain command line — a prompt inside Structura whose vocabulary is the knowledge base, not the filesystem.
-The nouns are notes, items, links, and assets; the verbs are search, items, backlinks, new, rename, export, and similar
-actions. Its pipe carries typed result sets, not raw shell output. It is closer to a notes formula bar, a minibuffer, or
-a command line with completion than to a full operating-system shell, but with the useful parts of shell interaction:
-pipes, history, and completion.
-
-Every verb is a function in a registry. Nothing spawns a subprocess except a controlled VCS call, and even then with
-explicit arguments rather than a shell command string. Consequences worth having: it behaves identically across
-workstations, it is unit testable without a terminal, and its full surface area is enumerable.
-
-## 3. Constraints — the deciding forces
+## 2. Constraints — the deciding forces
 
 Ordered by how much they decide.
 
-1. Structura is meant to replace a general editor for knowledge work, not to sit beside it forever. This is the
-   constraint that decides the most, because it converts every editorial capability the system relies on today into a
-   product requirement with a delivery date.
-2. The shipped artifact is a compiled desktop executable for a known platform. Dependencies are resolved and compiled at
-   build time, so the application keeps working regardless of the local runtime environment.
-3. Files are the truth. Local-first flat markdown is the authoring model. The database is a cache with no authority.
-4. It runs on the workstation, for one user, offline. No server, no sync service, no port bound.
-5. The design must stay compatible with the existing record model during the migration period, while making the
-   long-term state simpler than the legacy setup.
+1. **Files are the truth, in the standard format for their domain.** Markdown for notes, iCalendar for calendar,
+   vCard for contacts. The database is a cache with no authority. This is the constraint that most distinguishes
+   Structura from the thing it is modelled on, and it is not negotiable: an NSF you cannot read without the client is
+   exactly the failure mode being avoided.
+2. **One user, one workstation, offline.** No server, no sync service, no port bound, no accounts. Everything else in
+   the design gets simpler because of this, and the design should keep cashing that in rather than quietly spending it.
+3. **The engine is generic; the applications are design.** A special case written into engine code is a bug against
+   this constraint.
+4. **The shipped artifact is a self-contained desktop executable.** Dependencies are resolved and frozen at build time,
+   so the application keeps working regardless of the local runtime environment.
+5. **Existing content keeps working.** The markdown record model, its validator, and its generated views migrate
+   without a rewrite of the content.
 
-## 4. What carries over from the existing record model
+## 3. The model
 
-The current design is the requirements document. Four things transfer intact.
+Six nouns. Defined once, used everywhere.
 
-**The four layers** become the four layers of the application:
+| Noun | Definition |
+| --- | --- |
+| **Workspace** | A directory you open. Contains one or more databases, a config file, and local state. One open at a time |
+| **Database** | A directory of documents of a related kind, with one storage format and its own design. `notes/`, `calendar/`, `contacts/` |
+| **Document** | One record. A markdown file, a `VEVENT`, a `VCARD`. Has a UID, a type, and fields |
+| **Field** | A named value on a document. Typed by the form. May be multi-valued |
+| **Form** | Design: which fields a document type has, their types, defaults, validation, and layout |
+| **View** | Design: a selection pipeline plus a column list, evaluated on open. Never a stored copy |
+| **Folder** | Mutable membership. A set of UIDs you put there by hand. Not a query |
+| **Agent** | Code run over a document set — manually, on a schedule, or on save |
 
-| Layer       | In the current record model                | In Structura                                      |
-| ----------- | ------------------------------------------ | ------------------------------------------------- |
-| 1. Entities | Asset, person, org, document, project      | Rows in notes; the navigator's asset tree         |
-| 2. Events   | Observation, meeting, daily                | Rows in notes, ordered by date                    |
-| 3. Items    | `#item` lines in the note that raised them | Rows in `items`, edited through the item composer |
-| 4. Views    | Generated files in a register folder       | Saved queries evaluated live, optionally exported |
+"Field", not "item". The old design used `#item` for actionable to-dos; Notes uses "item" for what this document calls
+a field. Keeping both would guarantee permanent confusion, so to-dos are **tasks** from here on and the field-level
+noun is **field**.
 
-**The two rules** are enforced by construction rather than convention: links live in bodies because frontmatter is a
-typed form with no free-text link field; a tag is a quality because tags are a distinct completion context from `[[`.
+### Identity: the UID rule
 
-**The parser moves across whole.** The previous parsing and validation logic becomes the core of the vault layer:
-markdown parsing, schema validation, item parsing, and re-export. That is not code reuse for its own sake: every rule in
-the parser represents a bug that was found the hard way against real content, and rewriting it would be volunteering to
-find them again. The same goes for the renderers that generate derived files.
+**Every document has a UID that never changes, and links point at UIDs.**
 
-**The house style of the record** — sized problems, mechanism before evidence, tables for parallel facts — is what the
-app should make easy to write and never rewrite on its own.
+This is the rule that the previous draft was missing, and its absence was expensive: identity was the filename, which
+is why renaming a note required rewriting every wikilink in the workspace. That is a workaround for a hole, not a
+feature.
 
-## 5. Architecture
+| Store | Where the UID lives |
+| --- | --- |
+| Markdown | `uid:` in frontmatter, generated on first save |
+| iCalendar | The `UID` property. Already mandatory in the spec |
+| vCard | The `UID` property |
+
+The alignment is not a coincidence — both calendar and contact formats learned this lesson decades ago. Titles, file
+names, and paths become mutable labels. `rename` becomes a file operation with no link rewriting at all.
+
+Wikilinks stay human-writable as `[[Title]]`; the index resolves title → UID and the editor can rewrite a link to its
+canonical `[[Title|uid]]` form on demand. An unresolved link is a placeholder, which is a feature.
+
+## 4. Storage
+
+### Layout
+
+```
+workspace/
+  structura.toml            # workspace config: databases, schema, settings
+  design/
+    forms/*.toml            # form definitions per document type
+    views/*.toml            # saved views
+    templates/*.md          # new-document templates
+  notes/                    # markdown database
+    **/*.md
+  calendar/
+    personal/               # a collection (vdir)
+      displayname
+      color
+      <uid>.ics             # one VEVENT or VTODO per file
+    work/
+  contacts/
+    default/
+      <uid>.vcf             # one VCARD per file
+  .structura/
+    index.db                # cache. gitignored. deleting it loses nothing
+    collections.toml        # folder membership. TRACKED. not derivable from files
+    state.db                # unread marks, view state, recents. gitignored, per-machine
+    history
+```
+
+### One file per document
+
+Calendar and contact stores use the **vdir** convention — a directory per collection, one file per document, plus a
+`displayname` metadata file. This is an existing documented layout used by `vdirsyncer`, `khal`, and `khard`.
+
+Choosing it buys three things: git diffs that name the event that changed rather than showing a thousand-line blob
+rewrite; incremental reindex that works identically across all three stores (stat, hash, reparse one file); and a
+two-way CalDAV sync path that Structura does not have to write, because `vdirsyncer` already syncs a vdir against a
+CalDAV server.
+
+The cost, stated plainly: **Thunderbird cannot subscribe to a directory of `.ics` files.** It reads a single collection
+file or a CalDAV URL. So interop has two supported routes, and neither is "point your mail client at the folder":
+
+| Route | How | Direction |
+| --- | --- | --- |
+| Exported collection file | `export calendar personal` writes one `.ics` a mail client can subscribe to | One way, out |
+| `vdirsyncer` against CalDAV | Documented recipe; Structura ships the config example, not the sync code | Two way |
+
+Contacts are the same story with `.vcf` and CardDAV.
+
+### Formats and versions
+
+| Store | Format | Library | Notes |
+| --- | --- | --- | --- |
+| notes | Markdown + YAML frontmatter | existing parser | Ports across whole. See §5 |
+| calendar | iCalendar (RFC 5545), `VEVENT` and `VTODO` | `icalendar` | Write 2.0. Read whatever is handed to us |
+| contacts | vCard 4.0 (RFC 6350) | `vobject` or equivalent | Read 3.0 for import; write 4.0 |
+
+### Timezones and recurrence, decided now
+
+These are where calendar implementations go wrong, so they get a ruling rather than a discovery.
+
+- Events store `DTSTART`/`DTEND` with a `TZID`, exactly as authored. Floating times and all-day dates are distinct
+  kinds and are never silently converted to either of the others.
+- The index stores **expanded occurrences in UTC** over a rolling window, so every range query is plain SQL over an
+  indexed column. Editing an event deletes and re-expands its occurrences.
+- The window is ±2 years from today by default, extended on demand when a view asks beyond it, and re-anchored on
+  startup. Infinite recurrences are expanded to the window edge, not to infinity.
+- `RRULE` expansion uses `dateutil.rrule` with `RDATE`, `EXDATE`, and `RECURRENCE-ID` overrides applied on top.
+  Structura does not implement recurrence arithmetic by hand.
+
+## 5. What carries over from the existing record model
+
+Three things transfer intact, and one changes shape.
+
+**The parser moves across whole.** Markdown parsing, schema validation, task-line parsing, and re-export become
+`structura.stores.markdown`. Every rule in that parser represents a bug found the hard way against real content;
+rewriting it would be volunteering to find them again. Same for the renderers that produce the generated register
+files.
+
+**The two rules survive, now enforced by construction.** Links live in bodies, because frontmatter is edited as a
+typed form with no free-text link field. A tag is a quality, because tags are a distinct completion context from `[[`.
+
+**The house style** — sized problems, mechanism before evidence, tables for parallel facts — is what the editor should
+make easy to write and never rewrite on its own.
+
+**The four layers become document types, not architecture.** Entities, events, tasks, and views were a layering of the
+old content model. In Structura the first two are document types, tasks are a cross-cutting projection (§9), and views
+are engine machinery. The layering was a description of one workspace's schema; it should not be baked into a tool.
+
+## 6. Architecture
 
 ```mermaid
-flowchart LR
-  FS["Markdown files<br/>source of truth"] -->|parse| IDX[("Local index<br/>cache, disposable")]
-  FS -->|watchdog| IDX
-  IDX --> CL["Command line<br/>verbs, typed pipes"]
-  CL --> VW["Views<br/>saved queries"]
-  VW --> UI["Terminal panes"]
-  CL --> UI
-  UI -->|edit, save| FS
+flowchart TB
+  subgraph stores["structura.stores"]
+    MD["markdown"]
+    ICS["ical"]
+    VCF["vcard"]
+  end
+  FS["Files on disk<br/>source of truth"] --> stores
+  stores --> IDX[("structura.index<br/>SQLite cache, disposable")]
+  FS -.->|watchdog| IDX
+  IDX --> Q["structura.query<br/>typed pipeline"]
+  DES["structura.design<br/>forms, views, folders"] --> Q
+  Q --> APP["structura.app<br/>notes / calendar / contacts services"]
+  DES --> APP
+  APP --> UI["structura.ui<br/>PySide6"]
+  APP --> CLI["structura.cli<br/>headless"]
+  APP -->|write| stores
+  stores -->|serialize| FS
 ```
 
-Five modules, each with one job and a testable boundary:
+| Module | Job | Depends on |
+| --- | --- | --- |
+| `structura.core` | Document model, UID generation, field types, validation primitives | — |
+| `structura.stores` | Parse and serialize each format; one adapter interface, three implementations | core |
+| `structura.index` | SQLite schema, incremental sync, occurrence expansion, watcher, query execution | core, stores |
+| `structura.query` | Pipeline tokeniser, type checker, verb registry | core, index |
+| `structura.design` | Load and validate forms, views, folders, templates; the form expression evaluator | core |
+| `structura.app` | Application services: create, edit, save, search per document type. Headless and fully testable | all above |
+| `structura.agents` | Scheduled and triggered actions | app |
+| `structura.ui` | PySide6: panes, editors, calendar grids, contact cards, command bar | app |
+| `structura.cli` | Headless entry points: repl, lint, export, reindex | app |
 
-| Module            | Job                                                                                    | Depends on               |
-| ----------------- | -------------------------------------------------------------------------------------- | ------------------------ |
-| `structura.vault` | Parse and validate markdown; load the schema; serialize items and frontmatter back out | YAML parser, TOML parser |
-| `structura.index` | Local database schema, incremental rebuild, queries, file watcher                      | vault                    |
-| `structura.shell` | Tokeniser, pipeline type-checker, verb registry, history                               | index, vault             |
-| `structura.views` | Named saved pipelines; the export renderers that reproduce generated views             | shell                    |
-| `structura.ui`    | Terminal app: panes, editor, completer, keymap                                         | all of the above         |
+Dependency arrows run one way. Only `structura.ui` imports Qt, so everything below it is testable headlessly — and the
+CLI is not a toy, it is a second consumer that proves the boundary is real.
 
-The dependency arrows run one way. The UI layer is the only module that imports a terminal UI framework, so everything
-below it can be tested headlessly.
+### Stack
 
-## 6. The schema and the index
+Python core with a **PySide6/Qt** desktop UI, frozen to a single executable.
 
-### Where the schema lives
+Qt earns its place on the specifics: `QCalendarWidget` and the model/view framework map almost one to one onto month
+grids and view columns, `QTextDocument` handles rich text, and the whole thing freezes cleanly. Two things to watch,
+named now rather than discovered at release: Qt's default look needs deliberate styling to not feel like 2009, and
+**PySide6's LGPL terms need checking against single-file freezing** for an open-source release — dynamic linking is the
+condition, and a one-file bundle unpacks before it links, which is probably fine and should be confirmed rather than
+assumed. This is tracked as an open question in §15.
 
-**Decision: the schema is data, in a root configuration file, not constants in code.** Today the validation rules are
-module-level dicts. That is right for one project with one schema; it is wrong the moment a second project exists,
-because a personal vault wanting a different set of enums would need a code change to a tool shared with a work vault.
+## 7. The index
 
-```toml
-[schema]
-required = ["type", "title", "date"]
-types    = ["asset", "person", "org", "document", "project", "meeting", "observation", "note", "resource", "index"]
+**The rule: the index is a cache and never a source. Deleting `index.db` must lose nothing but a second.**
 
-[schema.enums]
-area = ["paint", "wwt", "monorail", "power-free", "plant"]
+Durable state that is genuinely not derivable from files — folder membership, unread marks — does not live in
+`index.db`. That was a contradiction in the previous draft and it is resolved by splitting the two: `collections.toml`
+is tracked user data, `state.db` is per-machine convenience, and `index.db` is disposable.
 
-[schema.status]
-asset       = ["operating", "degraded", "down", "removed"]
-observation = ["open", "contained", "resolved"]
-
-[schema.required_for]
-asset = ["area"]
-
-[index]
-skip      = ["0-Index", "6-Archive", "docs", "node_modules"]
-link_skip = ["6-Archive", "docs", "node_modules"]
-```
-
-Three properties this has to keep, because each one is load-bearing:
-
-- **The file is tracked and reviewable.** A schema change becomes a diff someone can read.
-- **A missing schema file is not an error.** An unconfigured workspace gets built-in defaults.
-- **The shipped schema is byte-equivalent to the legacy constants**, and a test asserts it: the enums parsed from the
-  default schema equal the application constants, field for field.
-
-Structura validates the schema file itself on load — an unknown key, a non-list enum, or a `required_for` naming a type
-that is not in `types` should fail loudly at startup rather than produce a workspace where nothing is checked.
-
-Everything downstream reads the schema from one place: the validator, the frontmatter form's pick-lists, the completion
-contexts, and the column promotion in the index below.
-
-### The index
-
-**The rule that governs it: the index is a cache and never a source. Deleting the index must lose nothing but a few
-hundred milliseconds.** This is the same rule that keeps the content honest: everything a user types goes to a file
-first; the index is updated from the file, never the other way round.
-
-Stored at `<workspace>/.structura/index.db`, gitignored. Inside the workspace so it is per-project and travels with a
-copy, not in a user cache directory where two projects could collide.
-
-### Index tables
+### Tables
 
 ```sql
-files      (path PK, mtime, size, sha256, indexed_at)
-notes      (path PK → files, title, type, date, area, status, parent, mtime)
-properties (path, key, value)                    -- every frontmatter scalar, incl. free-form keys
-tags       (path, tag)
-aliases    (alias PK, path)
-links      (src_path, target_raw, target_norm, section, is_embed, line_no)
-items      (path, line_no, description, asset, owner, raised, due, ref, done)
-notes_fts  (title, body)                         -- FTS5, external content over notes
+documents   (uid PK, store, dtype, path, title, sort_key, parent_uid, mtime, sha256, indexed_at)
+fields      (uid, key, value, ord)          -- ord gives multi-valued fields
+tags        (uid, tag)
+links       (src_uid, target_raw, target_uid, kind, section, line_no)
+occurrences (uid, start_utc, end_utc, all_day, tzid, recurrence_id, PRIMARY KEY (uid, recurrence_id))
+tasks       (uid, source_uid, source_line, description, status, due, priority, owner, context)
+contacts    (uid, fn, sort_name, org, primary_email)
+fts         (uid, title, body)              -- FTS5, external content
 ```
 
-Two notes on shape. `properties` is a key/value table rather than columns, so a free-form frontmatter key needs no
-migration; only the enum-checked keys named in the schema get promoted to columns on `notes` for indexing. And
-`target_norm` holds the alias-resolved title, so multiple titles or aliases resolve to the same target without every
-query knowing about the alias map.
+One `documents` table across all three stores is the load-bearing choice. `store` and `dtype` discriminate, `fields`
+holds everything that is not promoted, and a single query surface spans notes, events, and contacts. "Everything that
+mentions this contact" is one query, not three.
 
-### Incremental reindex
+Only fields named in a form as indexed get promoted to columns; everything else lives in `fields` and needs no
+migration when a workspace invents a new key.
 
-On startup and on every watcher event: stat the file, compare `(mtime, size)`, hash only on mismatch, and reparse only
-on hash change. A changed note deletes its rows by `path` and reinserts — no diffing, because reparsing one note is
-already cheap and diff logic would be a source of drift for no measurable gain.
+### Incremental sync
 
-A watcher handles external edits so the UI updates without a keystroke. Structura's own saves record the expected hash
-before writing so the resulting event is recognised and skipped, rather than bouncing back through the parser.
+On startup and on every watcher event: stat, compare `(mtime, size)`, hash on mismatch, reparse on hash change. A
+changed document deletes its rows by UID and reinserts. No diffing — reparsing one document is already cheap, and diff
+logic is a source of drift for no measurable gain.
 
-Access model: WAL mode, one writer connection owned by the indexer thread, a read-only connection per reader. The event
-loop never blocks on the database.
+Structura's own writes record the expected hash before writing so the resulting watcher event is recognised and
+skipped.
+
+Access: WAL mode, one writer connection owned by the indexer thread, a read-only connection per reader. The Qt event
+loop never blocks on the database — queries run on a worker and deliver results as signals.
 
 ### Performance budget
 
-Numbers, so they can be measured rather than argued about.
+Numbers so they can be measured rather than argued about. Reference workspace: 5,000 notes, 2,000 events, 1,000
+contacts.
 
-| Operation                            | Budget   |
-| ------------------------------------ | -------- |
-| Cold full reindex                    | < 300 ms |
-| Incremental reindex of one note      | < 20 ms  |
-| Keystroke to completion list on `[[` | < 50 ms  |
-| Launch to usable window              | < 500 ms |
+| Operation | Budget |
+| --- | --- |
+| Cold full reindex | < 2 s |
+| Incremental reindex, one document | < 20 ms |
+| Occurrence re-expansion, one recurring event | < 30 ms |
+| Calendar month range query | < 10 ms |
+| Keystroke to completion list on `[[` | < 50 ms |
+| Launch to usable window | < 1 s |
 
 Full reindex must stay cheap enough that "delete the database" is always an acceptable answer to any index bug.
 
-## 7. The command line
+## 8. Query, views, and folders
 
-The centrepiece. One line at the bottom of the window, always present, focused with a keyboard shortcut.
+### The pipeline
 
-### Grammar
+The typed pipeline from the previous draft survives, and it is the right idea. What changes is its billing: it is a
+query language with a command bar, not the identity of the product. Most work happens in panes and forms; the command
+bar is the power tool.
 
 ```
 verb [positional] [key:value ...] [--flag] [| verb ...]
 ```
 
-Deliberately the same `key:value` shape as an item line. The project already has one metadata grammar; the application
-should not teach a second. Values are a bare token, a `"quoted string"`, or a `[[wikilink]]`.
-
-Comparison suffixes on ordered fields: `age>90`, `raised<2026-01-01`, `due<today`.
-
-### Typed pipes
-
-This is the part that is not a shell. A stage does not emit text; it emits a set of notes or items, and each verb
-declares what it consumes and produces.
+A stage emits a typed set — documents, occurrences, tasks, links — and each verb declares what it consumes and
+produces, so a bad pipeline fails at parse time rather than halfway through.
 
 ```
 find type:asset area:wwt | backlinks | where type:observation | sort date desc | table
-items open age>120 | table age,item,asset,owner
+tasks open age>120 | table age,description,source,owner
+events from:today to:+7d | group by:day | list
+contacts org:"Acme" | table fn,primary_email,tel
 grep "riser pressure" | open
-placeholders | head 10 | table
 ```
 
-Because the types are declared, the pipeline is checked before it runs. A bad pipeline fails at parse time rather than
-halfway through the action.
+Verbs, grouped. Signatures are `input → output`.
 
-### Verbs, v1
+| Group | Verbs |
+| --- | --- |
+| Sources | `find` `grep` `tasks` `events` `contacts` `placeholders` `orphans` `folder` |
+| Traversal | `links` `backlinks` `children` `parent` |
+| Plumbing | `where` `sort` `group` `head` `count` `distinct` |
+| Render | `table` `list` `tree` `calendar` `cards` |
+| Action | `open` `new` `set` `tag` `untag` `move` `delete` `file` `unfile` `export` `wrap` |
+| Meta | `view` `lint` `reindex` `workspace` `git` `help` |
 
-| Verb                                | Signature     | Notes                                                |
-| ----------------------------------- | ------------- | ---------------------------------------------------- |
-| `find`                              | – → notes     | by type, area, status, tag, title, date              |
-| `grep`                              | – → notes     | full-text search                                     |
-| `items`                             | – → items     | open, done, owner, asset, age, due                   |
-| `links` / `backlinks`               | notes → links | outbound / inbound                                   |
-| `placeholders`                      | – → links     | unwritten targets ranked by inbound count            |
-| `orphans`                           | – → notes     | no inbound links                                     |
-| `where` / `sort` / `head` / `count` | any → same    | pipeline plumbing                                    |
-| `table` / `list` / `tree`           | any → view    | how results render                                   |
-| `open`                              | notes → –     | load into the document pane                          |
-| `new`                               | – → notes     | from a template                                      |
-| `rename`                            | note → –      | rename the file and rewrite every wikilink to it     |
-| `move`                              | notes → –     | move between folders; links unaffected               |
-| `set` / `tag` / `untag`             | notes → notes | frontmatter edits, schema-checked before writing     |
-| `lint`                              | – → text      | validation output                                    |
-| `reindex`                           | – → text      | full or incremental rebuild                          |
-| `export`                            | any → –       | write a result to a markdown file                    |
-| `view`                              | –             | save / list / load a named pipeline                  |
-| `delete`                            | notes → –     | delete a note; reports what linked to it first       |
-| `wrap`                              | notes → –     | explicit reflow to a chosen width                    |
-| `workspace`                         | –             | open / recent / switch                               |
-| `git`                               | –             | status, diff, commit, sync — explicit and controlled |
-| `help`                              | – → text      | per-verb guidance                                    |
+No escape to a system shell. Nothing spawns a subprocess except a controlled VCS call with explicit arguments.
 
-No `!` escape to a system shell in v1. If a command-line escape is ever wanted, it should be a fixed allowlist of
-operations, not a free-form command string.
+### Views
 
-History persists to a local history file. Up walks it, Tab completes verbs, keys, and values from the index, and the UI
-shows the top match as ghost text.
+**A view is a saved pipeline plus a column list.** Stored as one TOML file per view under `design/views/`,
+hand-editable and reviewable in a diff.
 
-## 8. Views
-
-**A view is a saved pipeline.** This is the part worth keeping from previous notes systems: a view was a selection
-formula plus a column list, not a stored copy of anything, so it was never out of date. Generated registers are stored
-copies that drift as soon as content changes.
-
-```
-view save "Open by age"  items open | sort age desc | table age,item,asset,owner,raised,source
-view save "WWT open"     items open area:wwt | sort age desc | table
-view save "Write next"   placeholders | head 20 | table
+```toml
+name = "Open by age"
+query = 'tasks open | sort age desc'
+columns = [
+  { field = "age", label = "Age", width = 6 },
+  { field = "description", label = "Task", width = "*" },
+  { field = "source", label = "Raised in" },
+  { field = "owner" },
+]
+group_by = "owner"     # categorised, collapsible — the Notes view feature worth having
 ```
 
-Saved views live in a plain-text configuration file, hand-editable and reviewable in a diff. They appear in the
-navigator; selecting one evaluates it and fills the view pane.
+Two things the previous draft was missing and Notes had: **categorisation** (group, collapse, count per group) and
+**column expressions** (`age` is computed, not stored). Both are cheap once views are data.
 
-Generated markdown remains available as an export format rather than the only way to see a register. This is the correct
-relationship: generated files are a representation, not the system of record.
+Generated markdown registers remain available as an `export`, not as the only way to see a register. Generated files
+are a representation; the view is the thing.
 
-## 9. The editor
+### Folders
 
-**Source mode is the default and the only mode you type in.** Preview is a toggle, never an editing surface. This is the
-correct call for content where the schema is expressed in the text itself — an item's owner, a `Part of` line, the
-ignore guards — and a WYSIWYG layer over text that is itself the data model is a machine for producing files that look
-right and index wrong.
+Mutable membership, stored in `.structura/collections.toml` and tracked in git:
 
-### Wikilink autocompletion
-
-Typing `[[` opens an overlay list at the cursor, backed by one indexed query. Ranking, in order:
-
-1. Exact prefix match on title or alias
-2. Inbound link count
-3. Recently opened
-4. Placeholders included and marked
-
-`Enter` inserts the canonical title; `Ctrl+Enter` inserts an alias if one is selected. Completion is not limited to
-`[[`:
-
-| Trigger                    | Completes from                     |
-| -------------------------- | ---------------------------------- |
-| `[[`                       | titles, aliases, placeholders      |
-| `#`                        | tags in use, ranked by count       |
-| `![[`                      | titles, then `#sections` after `#` |
-| an enum key in frontmatter | the closed enum set                |
-| the command line           | verbs, keys, values                |
-
-All five are the same widget over the same index.
-
-### Frontmatter as a form
-
-The property pane above the editor renders frontmatter as typed fields from the schema: closed enums as pick-lists,
-dates as dates, tags as a chip list, everything else as text. `type` selects which keys are required and which enums
-apply. Two of the validator's rule classes cannot be violated through it, and a note edited elsewhere still gets caught
-by lint.
-
-### Items as structures
-
-A dedicated item composer opens with a keyboard shortcut: description, asset, owner, raised date, due date, and
-reference. It emits the exact one-line grammar from the same module that parses it, so the near-miss classes are not
-created inside the app. Existing item lines remain editable as text when needed; the composer is the fast path, not the
-only one.
-
-### Not reformatting, and what happens to a formatter
-
-Structura writes back only the bytes it changed. It does not reflow prose, realign tables, or normalise frontmatter key
-order. This is the basis of the acceptance tests: a source file must remain stable under an ordinary save.
-
-What changes is where formatting runs. Formatting becomes a CI check and an explicit wrap verb available inside the app.
-Never on save, in either place.
-
-The `wrap` verb does the two things that matter: reflow prose to the chosen width and align table pipes. It does not
-attempt a full markdown normaliser, and CI is the backstop for drift.
-
-## 10. Preview, embeds, and the flatten step
-
-Preview renders with a markdown widget and a pre-pass that resolves embed links against the index. This grants a single
-resolver for both preview and export.
-
-The embed resolver becomes the flatten step for document export: a command writes the same expansion the preview shows
-as plain markdown, ready for downstream tooling. One resolver, two consumers, and a deferred cycle closes as a side
-effect rather than as a project.
-
-## 11. Coexistence, and retiring the general editor
-
-The end state is that the general editor is not used for structured knowledge work. That is a goal with a delivery list
-attached, and the list is the honest part: every editor capability the process currently relies on is a Structura
-requirement, and until it ships, the migration is a transition rather than a plan.
-
-| Editor capability               | Structura replacement                                 | Phase |
-| ------------------------------- | ----------------------------------------------------- | ----: |
-| Edit markdown, syntax highlight | Source-mode editor                                    |     4 |
-| Wikilink completion, navigation | Index-backed completer and navigation history         |     4 |
-| Backlinks panel                 | `backlinks` verb and a side pane                      |     3 |
-| Placeholders panel              | `placeholders` verb and saved view                    |     2 |
-| Markdown preview                | Preview toggle with embed resolution                  |     5 |
-| Templates, daily note           | `new` verb, daily template, and quick note creation   |     6 |
-| Search across the workspace     | FTS5 via `grep`                                       |     1 |
-| File tree, rename, move, delete | Navigator plus direct file operations                 |   3–4 |
-| Reindex build task              | `reindex` plus the watcher                            |     1 |
-| Format on save                  | CI check plus explicit `wrap` verb                    |     7 |
-| Source control UI               | `git` verbs plus a diff pane                          |     7 |
-| Graph view                      | A link-neighbourhood tree, not a force-directed graph |     7 |
-
-The graph is the one honest gap. A force-directed graph is not a thing a terminal draws well, and pretending otherwise
-would produce something worse than the current state. What a terminal does draw well is a tree, and what the graph is
-actually used for — what a note reaches and what reaches it — is a tree query the index answers directly.
-
-**Until the migration is complete, the compatibility contract still holds** because a half-migrated workspace must stay
-editable in both the old and new surface:
-
-| Concern        | Contract                                                                                   |
-| -------------- | ------------------------------------------------------------------------------------------ |
-| Files          | No tracked file changes shape; Structura adds a local metadata folder and config file      |
-| Editors        | Fully functional throughout the transition; both may be open on the same workspace at once |
-| Formatting     | Keeps formatting from CI rather than on save until the explicit wrap command is in place   |
-| Legacy tooling | Keeps working while Structura learns the same rules                                        |
-| Git            | Structura never commits implicitly; explicit git verbs only                                |
-
-Concurrent editing takes the same ruling as a single-writer workflow with a conflict prompt rather than silent
-clobbering. If a note changes on disk while an editor buffer is dirty, save prompts reload / overwrite / save a copy
-with the on-disk modification time shown.
-
-## 12. Screens and keys
-
-The three-pane layout is a strong default because it makes the content model visible without requiring a large amount of
-reading.
-
-```
-┌─ Navigator ──────┬─ View ─────────────────────────────────────┐
-│ Folders          │ Item                   Asset      Owner  │
-│ Saved views      │ Diagnose...            ...        ...    │
-│ Assets (tree)    │ Install delivered...    ...        ...    │
-│ Tags             ├─ Document ─────────────────────────────────┤
-│ Placeholders     │ ---                                        │
-│                  │ type: observation                          │
-│                  │ status: contained                          │
-│                  │ ---                                        │
-├──────────────────┴────────────────────────────────────────────┤
-│ > items open age>120 | table                                  │
-│ workspace ready · index fresh                                │
-└───────────────────────────────────────────────────────────────┘
+```toml
+["Reading list"]
+uids = ["01J8...", "01J9..."]
 ```
 
-The asset tree in the navigator is built from body relationships such as parent or containment lines.
+`file` and `unfile` add and remove. A folder is not a query and must not be confused with one — that distinction is
+half of why Notes' navigator worked.
 
-| Key      | Action                 | Key           | Action                    |
-| -------- | ---------------------- | ------------- | ------------------------- |
-| `Ctrl+L` | focus the command line | `Ctrl+E`      | toggle source / preview   |
-| `Ctrl+P` | command palette        | `Ctrl+S`      | save                      |
-| `Ctrl+O` | quick open by title    | `Ctrl+K`      | insert wikilink           |
-| `Ctrl+I` | new item               | `Ctrl+B`      | backlinks of current note |
-| `F5`     | reindex                | `Alt+←` / `→` | navigation history        |
-| `F2`     | rename note            | `Ctrl+J`      | today's journal note      |
+## 9. Applications
 
-Bindings live in a local configuration file so they are yours to change; the table above is the default.
+### Notes
 
-**Startup opens today's journal note.** Not the last workspace, not an empty pane — for a daily-driver knowledge system,
-the landing is the day. One wrinkle is worth deciding now: the note usually does not exist yet, and creating it on every
-launch would seed the workspace with empty dailies for every day the app was merely opened. The design resolves this by
-opening an unsaved buffer rendered from the daily-note template, writing the file on the first save.
+The markdown database, and the direct descendant of the existing record model. Document types come from the
+workspace schema — asset, person, org, document, project, meeting, observation, note, resource, index. Frontmatter is
+edited through the form; the body is edited as markdown source.
 
-**One workspace is open at a time**, with switching rather than restarting: open a different workspace closes the
-current index and opens another, and the navigator lists recent workspaces. Each workspace owns its own local index and
-configuration, so personal and work projects can disagree about their schemas entirely — which is the point of modular
-schema management.
+**Source mode is the default and the only mode you type in.** Preview is a toggle, never an editing surface. For
+content whose schema is expressed in the text itself, a WYSIWYG layer over the data model is a machine for producing
+files that look right and index wrong.
 
-## 13. Testing and the acceptance test
+**Structura writes back only the bytes it changed.** No prose reflow, no table realignment, no frontmatter key
+reordering. This is the basis of an acceptance test, not a preference. Formatting is an explicit `wrap` verb plus a CI
+check — never on save.
 
-The definition of done for v1 is a parity gate, in the spirit of a reconstruction diff: an aggregate match is not
-sufficient, the output must be identical.
+Completion is one widget over one index, in five contexts:
 
-1. **Export parity.** For each of the generated views, Structura's export is byte-identical to the legacy output for the
-   same workspace.
-2. **Lint parity.** `structura lint` returns exactly the violation list of the validator on both a clean workspace and a
-   fixture workspace seeded with every violation class.
-3. **Round-trip fidelity.** Open each note in source mode and save each without editing → the working tree stays empty.
-   This is the test that keeps the no-reformatting promise honest.
-4. **Index equivalence, property-based.** For a generated workspace, every query answer from the local database equals
-   the answer computed directly from the parsed notes.
-5. **Shell verbs.** Unit tests per verb, plus pipeline type-check tests asserting the bad pipelines fail at parse time.
-6. **UI.** Headless interaction tests for open a note, type `[[`, and assert the completion list; snapshot tests for
-   panes.
-7. **Schema fidelity.** The enums parsed from the shipped default schema equal the legacy constant values, field for
-   field.
-8. **Frozen-build smoke test.** The packaged executable starts, opens a fixture workspace, and exits non-zero if any
-   startup checks fail.
+| Trigger | Completes from |
+| --- | --- |
+| `[[` | titles, aliases, placeholders — ranked by prefix match, then inbound count, then recency |
+| `#` | tags in use, ranked by count |
+| `![[` | titles, then `#sections` after `#` |
+| `@` | contacts |
+| an enum field in a form | the closed set from the form definition |
+| the command bar | verbs, keys, values |
 
-Tests 1 and 3 run against real content, not a fixture. A product whose whole job is the upkeep of structured notes
-should be gated on real content.
+### Calendar
 
-## 14. Packaging and dependencies
+`VEVENT` documents in `calendar/<collection>/`. Day, week, month, and agenda views over the `occurrences` table.
+Multiple collections with colours, toggled on and off. Create by dragging on the grid or by `new event`; edit through
+the event form.
 
-Two artifacts, one source tree. **Development** is an environment-managed project with a pinned lockfile and a build
-command that runs the app from source. **Distribution** is a single desktop executable built by CI.
+Two things it does that a standalone calendar cannot, because it sits on the same document store:
 
-The executable is the more consequential half, because it changes what the program depends on at rest. Once every
-dependency is compiled into the binary, the app no longer depends on the local runtime environment or an approval that
-could lapse.
+- **A meeting note and a calendar event are linkable.** The event carries the note's UID; the note's backlinks show the
+  meeting. `events from:today | backlinks` is a real query.
+- **Birthdays are projected, not stored.** A contact's `BDAY` produces a yearly occurrence in the index with no event
+  file on disk. Deleting the contact removes the birthday, because there was never a second copy to go stale.
 
-### The build
+### Contacts
 
-CI, on every push and tag:
+`VCARD` documents in `contacts/<collection>/`. A searchable list plus a card editor: names, multiple emails and
+phones with types, addresses, org and title, birthday, categories, notes, photo.
 
-1. Install dependencies from the lockfile.
-2. Run the full test suite, including the parity gates.
-3. Run a formatting check.
-4. Build a one-file executable.
-5. Upload the executable as a build artifact and attach it to the release on a tag.
+Linked both ways to the note store: a note's `people:` field holds contact UIDs and renders as names; a contact's card
+shows every note and event that references it. This is the address-book feature Notes had and standalone contact
+managers do not — the address book is not a silo, it is an index into everything else.
 
-Three things about a frozen app are cheaper to design for than to debug:
+## 10. Tasks
 
-- **Package data must be bundled.** The application includes its default schema and templates as packaged resources.
-- **The local database engine is frozen in too.** Whether full-text search and JSON support is available becomes a
-  property of the build, not of the workstation.
-- **Build it as a console application.** A terminal app double-clicked from Explorer with no console attached has
-  nowhere to draw. Ship it as a console binary and launch it from a terminal host; a shortcut that opens the terminal on
-  the executable is the friendly version of that.
+Tasks are the one thing that legitimately spans two stores, so the design says so explicitly rather than picking a
+side.
 
-### Dependencies
+| Source | Where it lives | Why |
+| --- | --- | --- |
+| Inline task line | A `#task` line inside the note that raised it | Context is the point. A task raised by an observation belongs in the observation |
+| Standalone task | A `VTODO` in a calendar collection | Due dates, priorities, alarms, and CalDAV sync come free |
 
-Checked rather than assumed.
+Both project into the `tasks` table with the same shape, so one view lists both. Editing an inline task from the task
+view writes back to the line in the source note; editing a `VTODO` writes the file. The old design's best property —
+that a task is raised where it was observed — survives, and the thing it was missing — real due dates and reminders —
+arrives with `VTODO`.
 
-| Set                   | Purpose                                             |
-| --------------------- | --------------------------------------------------- |
-| Core                  | terminal UI framework, YAML handling, file watching |
-| Optional syntax layer | source highlighting and completion helpers          |
-| Database layer        | local embedded database with full-text indexing     |
+The old question of "how strict should the task grammar be for non-asset work" answers itself here: the grammar is
+whatever the task form requires, and the asset field is required only for the document types that require it.
 
-The decision is that syntax support remains optional for the default application, but the product still keeps a
-deliberate, minimal dependency footprint.
+## 11. Forms
 
-## 15. Order of work
+**Design as data.** One TOML file per document type under `design/forms/`, tracked and reviewable.
 
-Bottom-up, so each phase is testable before anything sits on it, and each ends at something usable.
+```toml
+type = "observation"
+label = "Observation"
+icon = "eye"
 
-| Phase | Delivers                                                                                     | Gate                                         |
-| ----- | -------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| 0     | Project skeleton, schema file, validation and index tests                                    | Ported tests green; schema matches defaults  |
-| 1     | Local index, incremental rebuild, watcher — no UI                                            | Acceptance tests 1, 2 and 4                  |
-| 2     | Command line as a headless REPL over the index                                               | Verb and pipeline-type tests                 |
-| 3     | Terminal shell: three panes, navigator, view pane, command line                              | Read-only workspace browsing that feels fast |
-| 4     | Editor: source mode, save, link completion, conflict prompt                                  | Acceptance test 3                            |
-| 5     | Preview, embed resolution, export flattening                                                 | The note model renders end to end            |
-| 6     | Frontmatter form, item composer, templates, journal-on-startup, workspace switch             | Lint stays clean editing only in Structura   |
-| 7     | Retire the general editor: git pane, wrap verb, link-neighbourhood tree, packaged executable | Real work with the editor closed             |
+[[fields]]
+name = "title"; type = "text"; required = true
 
-**Phase 1 is the review checkpoint** because if the index and the parser disagree with the legacy output, everything
-above them is built on sand. Phases 0–2 produce no window at all, and that is deliberate — by the end of phase 2 the
-workspace is queryable from a REPL, which is already more than exists today.
+[[fields]]
+name = "date"; type = "date"; required = true; default = "today()"
 
-**Phase 7 has a behavioural gate, not a test.** The list in §11 can be complete and the tool still not be worth
-switching to; the only honest check is a week of real knowledge work with the general editor closed, and a list of what
-you reached for and could not find. CI and the executable land here too — early enough to be useful, late enough that
-there is something worth installing.
+[[fields]]
+name = "status"; type = "enum"; required = true
+choices = ["open", "contained", "resolved"]
+indexed = true
 
-## 16. Non-goals
+[[fields]]
+name = "asset"; type = "link"; target_type = "asset"; required = true
 
-Explicitly excluded, to keep v1 finishable:
+[[fields]]
+name = "people"; type = "contact"; multi = true
 
-- **A terminal emulator / PTY.** Not what was asked for, and the costly misreading of it.
-- **Sync, server, or multi-user.** The local workspace is the source of truth. Single-writer workflow is the model.
-- **Coworker distribution.** It is not v1. Handing a colleague a tool means handing them a workspace, a schema, and a
-  support burden.
-- **Publishing.** Permanently out of scope for a private knowledge workspace.
-- **A plugin API.** A verb registry is already the extension point; a public API before there is a second user is
-  guesswork.
-- **Replacing the editor for code.** Retiring it for PKM work is the goal; Structura is a note editor and has no
-  ambition to open arbitrary source files.
-- **Reformatting on save.** Formatting is explicit — the wrap verb and CI gate.
-- **A force-directed graph view.** A link-neighbourhood tree instead.
-- **Encryption at rest.** The privacy control is that the workspace is private; adding a second one nobody asked for
-  invites the question of key management.
+[[fields]]
+name = "severity"; type = "number"; min = 1; max = 5
+visible_when = 'status != "resolved"'
+```
 
----
+Field types: `text`, `longtext`, `number`, `bool`, `date`, `datetime`, `enum`, `link`, `contact`, `tags`, `computed`.
 
-## Open questions
+The expression language for `default`, `visible_when`, and `validate` is deliberately tiny — field references,
+literals, comparisons, `and`/`or`/`not`, and a fixed function list (`today()`, `now()`, `uid()`, `user()`). It is not
+`@formula` and will not grow into it. Anything that wants real logic is an agent, and agents are Python.
 
-- **Framework undecided.** The product needs a terminal UI with strong keyboard workflow and cheap local indexing. The
-  exact frontend framework is not yet locked, and the decision should stay open until an interaction prototype is built
-  and measured.
-- **Whether generated register files stay in the workspace.** The app can compute them live, but the repository may
-  still want files for browser access and simple git review.
-- **Which schema variations are supported for personal and work projects.** The design should allow per-workspace
-  configuration without forcing a forked product.
-- **How strict the item grammar should be for non-asset work.** The current design assumes asset-bound records, but
-  personal workflows will likely need an exception.
+Because the form drives the editor, two whole classes of validation error stop being reachable from inside Structura: a
+closed enum cannot take an invalid value, and a link cannot land in a field that is not a link field. Lint remains as
+the backstop for anything edited elsewhere.
 
-This design is intentionally written to keep the product direction clear while leaving a small number of architecture
-and workflow questions open until the prototype answers them.
+The form *designer* — building forms in the app rather than in a text editor — is post-v1. Forms being data is what
+makes that a later feature instead of a later rewrite.
+
+## 12. Agents
+
+An agent is a named unit of work over a document set. Designed now, built in phase 8.
+
+| Trigger | Example |
+| --- | --- |
+| Manual | "Roll unfinished tasks forward to today" |
+| Scheduled, while the app runs | Nightly lint; weekly review note from a template |
+| On save | Validate; update a rollup field; stamp `modified` |
+
+An agent is either a saved pipeline with an action verb, or a Python function in `workspace/agents/`. The second form
+is arbitrary code running with the user's own privileges over the user's own files, which is exactly what LotusScript
+agents were, and is acceptable for a single-user local tool in a way it would not be for anything shared. If Structura
+ever grows a second user, agent code is the first thing that needs a trust story.
+
+This is also the answer to "no plugin API" from the previous draft, and it is a better answer than the old one: Notes
+never had a plugin API either. Forms, views, and agents *are* the extension mechanism, and they are data and scripts in
+the workspace, not a versioned public interface.
+
+## 13. The window
+
+An application switcher on the left, a navigator, a view pane, and a document pane. The command bar is one line at the
+bottom, always present.
+
+```
+┌─────┬─ Navigator ─────┬─ View ──────────────────────────────────────┐
+│ ▣   │ Collections     │ Age  Task                 Raised in    Owner│
+│ Not │ Saved views     │ 142  Diagnose riser...    [[WWT-03]]   AB   │
+│ ─── │ Folders         │ 121  Install delivered... [[Paint-1]]  RS   │
+│ ▤   │ Assets (tree)   ├─ Document ──────────────────────────────────┤
+│ Cal │ Tags            │ Status  [contained ▾]   Date [2026-08-14]   │
+│ ─── │ Placeholders    │ Asset   [[WWT-03]]      People [AB] [RS]    │
+│ ▦   │                 ├─────────────────────────────────────────────┤
+│ Con │                 │ Riser pressure dropped during the overnight │
+│     │                 │ cycle. #task Diagnose riser >>AB @2026-09-01│
+├─────┴─────────────────┴─────────────────────────────────────────────┤
+│ > tasks open age>120 | table                                        │
+│ workspace ready · index fresh · 5,124 documents                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+The form renders above the source editor, not as a separate dialog — the fields and the prose are one document and
+should look like one.
+
+| Key | Action | Key | Action |
+| --- | --- | --- | --- |
+| `Ctrl+L` | focus command bar | `Ctrl+E` | toggle source / preview |
+| `Ctrl+P` | command palette | `Ctrl+S` | save |
+| `Ctrl+O` | quick open by title | `Ctrl+K` | insert link |
+| `Ctrl+T` | new task | `Ctrl+B` | backlinks of current document |
+| `Ctrl+1/2/3` | Notes / Calendar / Contacts | `Alt+←` `→` | navigation history |
+| `F5` | reindex | `F2` | rename |
+| `Ctrl+J` | today's journal note | `Ctrl+G` | go to date |
+
+Bindings live in a config file; the table is the default.
+
+**Startup opens today.** For a daily-driver PIM the landing is the day — the journal note beside the day's agenda.
+The journal note usually does not exist yet, and creating one on every launch would seed the workspace with empty
+dailies for every day the app was merely opened, so startup opens an *unsaved buffer* rendered from the template and
+writes the file on first save.
+
+**One workspace at a time**, with switching rather than restarting. Each workspace owns its own design, index, and
+config, so a personal and a work workspace can disagree about their schemas entirely.
+
+**Concurrent edits.** If a document changes on disk while a buffer is dirty, save prompts reload / overwrite / save a
+copy, with the on-disk modification time shown. No silent clobbering. Git is the merge tool; Structura never commits
+implicitly.
+
+## 14. Testing, packaging, and order of work
+
+### Acceptance tests
+
+The definition of done is parity, and an aggregate match is not sufficient — output must be identical.
+
+1. **Export parity.** Structura's generated registers are byte-identical to the legacy renderer's output for the same
+   workspace.
+2. **Lint parity.** `structura lint` returns exactly the legacy validator's violation list, on a clean workspace and on
+   a fixture seeded with every violation class.
+3. **Round-trip fidelity.** Open every document, save without editing, working tree stays empty. Runs against real
+   content, not fixtures, and covers all three stores — an `.ics` that gains a `PRODID` line on every save fails this
+   as surely as a reflowed paragraph.
+4. **Index equivalence, property-based.** For a generated workspace, every query answer from SQLite equals the answer
+   computed directly from parsed documents.
+5. **Recurrence conformance.** Expansion matches a fixture set of `RRULE`s including `EXDATE`, `RECURRENCE-ID`
+   overrides, DST boundaries, and all-day-vs-timed.
+6. **Query verbs.** Unit tests per verb, plus type-check tests asserting bad pipelines fail at parse time.
+7. **Forms.** Every shipped form loads, validates, round-trips a document, and rejects each violation it should.
+8. **UI.** `pytest-qt` interaction tests: open a document, type `[[`, assert the completion list; create an event by
+   dragging; snapshot tests for panes.
+9. **Frozen-build smoke test.** The packaged executable starts, opens a fixture workspace, runs a query, and exits
+   non-zero if any startup check fails.
+
+### Packaging
+
+Two artifacts, one source tree. Development is a lockfile-pinned project run from source; distribution is a
+single executable built by CI on every push and tag: install from lockfile → full test suite including parity gates →
+format check → freeze → upload artifact, attach to release on tag.
+
+Three things about a frozen app are cheaper to design for than to debug: package data (default design, templates,
+schema) must be explicitly bundled; SQLite with FTS5 must be frozen in so full-text search is a property of the build
+rather than the workstation; and Qt plugin paths must be verified in the frozen bundle, because a missing platform
+plugin fails at launch with a message that explains nothing.
+
+### Order of work
+
+Bottom-up, each phase testable before anything sits on it, each ending at something usable.
+
+| Phase | Delivers | Gate |
+| --- | --- | --- |
+| 0 | Skeleton, document model, UIDs, markdown store, ported validator | Ported tests green; acceptance 2 |
+| 1 | Index, incremental sync, watcher — no UI | Acceptance 1 and 4 |
+| 2 | Query pipeline, headless CLI and REPL | Acceptance 6 |
+| 3 | Qt shell: panes, navigator, view pane, source editor, save | Acceptance 3; workspace browsing feels fast |
+| 4 | Forms, templates, task lines, views UI, folders | Acceptance 7; lint stays clean editing only in Structura |
+| 5 | Calendar: ical store, occurrence expansion, day/week/month, VTODO | Acceptance 5; a week of real scheduling |
+| 6 | Contacts: vcard store, cards, note↔contact links, birthday projection | Contacts replace whatever holds them today |
+| 7 | Preview, embeds, export flattening, link tree, git pane, `wrap` | The note model renders end to end |
+| 8 | Agents, packaging, interop recipes, form designer if it earns it | Acceptance 9; a month of real use |
+
+**Phase 1 is the review checkpoint.** If the index and the parser disagree with the legacy output, everything above is
+built on sand. Phases 0–2 produce no window at all, deliberately — by the end of phase 2 the workspace is queryable
+from a REPL, which is more than exists today.
+
+**Phase 5 is the proof of the thesis.** If the calendar can be built out of engine machinery plus a form and some
+views, the engine framing was right. If it needs special cases carved into the index, it was wrong, and better to learn
+that in phase 5 than phase 8.
+
+**Phase 8 has a behavioural gate, not a test.** A month of real use with nothing else open, and a list of what you
+reached for and could not find.
+
+## 15. Non-goals and open questions
+
+### Non-goals
+
+- **Email.** Permanently. Outlook and Thunderbird exist and are better at it than this project will ever be.
+- **A server, sync service, or multi-user mode.** Single writer, local files. Git replicates notes; `vdirsyncer`
+  replicates calendars and contacts.
+- **A CalDAV/CardDAV server or client.** Structura writes the on-disk format that existing sync tools understand. That
+  is the whole integration.
+- **`@formula` or a macro language.** A tiny expression language for forms, real Python for agents, nothing between.
+- **ACLs, reader/author fields, encryption at rest.** The privacy control is that the workspace is on your disk.
+- **Mobile, web, or a browser UI.** Desktop.
+- **A terminal emulator.** The command bar is a domain command line whose vocabulary is the knowledge base. Nothing
+  spawns a shell.
+- **A force-directed graph.** A link-neighbourhood tree, which is what the graph is actually used for.
+- **Reformatting on save.** Explicit `wrap` plus a CI check.
+- **Replacing an editor for code.** Structura is a document application, not an IDE.
+
+### Open questions
+
+- **PySide6 licensing under a one-file freeze.** LGPL requires the user be able to relink Qt. A frozen bundle unpacks
+  and dynamically links at runtime, which is probably compliant, but an open-source release should confirm this rather
+  than assume it. The fallback is a directory-style distribution instead of one file.
+- **Whether unread marks are worth their weight.** They were load-bearing in Notes because Notes was a mail-shaped
+  application. For notes and events they may be noise. Cheap to add in phase 4, hard to remove once relied on.
+- **How much expression language forms actually need.** `visible_when` may be enough; computed fields may pull the
+  language toward `@formula` one convenience at a time. Watch this in phase 4.
+- **Whether the form designer ever ships.** It is the difference between "a PIM with configurable types" and "a
+  platform". It should be judged on whether hand-editing form TOML has become annoying, not on ambition.
+- **Whether generated register files stay in the workspace.** Views compute them live, but the repository may still
+  want files for browser access and simple git review.
+
+## 16. Decision log
+
+| # | Decision | Because |
+| --- | --- | --- |
+| 1 | An engine with three built-in applications, not three applications | Makes calendar and contacts belong rather than intrude; makes user types a later feature, not a later rewrite |
+| 2 | Files are the truth, in the native format per domain | Keeps the anti-NSF promise; buys interop and git review for free |
+| 3 | vdir layout, one file per event and contact | Git diffs that name the change; uniform incremental sync; `vdirsyncer` handles CalDAV so Structura does not |
+| 4 | Every document has an immutable UID; links resolve to UIDs | Kills the rename-rewrites-every-link problem; aligns with what iCalendar and vCard already mandate |
+| 5 | "Field" for the value on a document, "task" for a to-do | The old `#item` would have collided permanently with the Notes meaning of item |
+| 6 | One `documents` table across all stores | One query surface. "Everything about this contact" is one query, not three |
+| 7 | Occurrences expanded into the index over a rolling window | Range queries become plain indexed SQL instead of recurrence arithmetic per query |
+| 8 | `index.db` disposable, `collections.toml` tracked, `state.db` per-machine | Resolves the previous draft's contradiction between "the cache is disposable" and folders being real user data |
+| 9 | Python core, PySide6 UI, headless everything below it | The existing parser ports unchanged; Qt's model/view and calendar widgets match the domain; the CLI keeps the boundary honest |
+| 10 | A tiny form expression language; agents are Python | Avoids reinventing `@formula`, which is the part of Notes nobody misses |
